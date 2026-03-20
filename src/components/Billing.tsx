@@ -290,7 +290,7 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
-              className="bg-white w-full max-w-md rounded-t-[40px] sm:rounded-[40px] p-6 shadow-2xl overflow-hidden"
+              className="bg-white w-full max-w-md rounded-t-[40px] sm:rounded-[40px] p-6 shadow-2xl overflow-y-auto max-h-[90vh] pb-32"
             >
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-bold text-gray-800">{t.billPreview}</h3>

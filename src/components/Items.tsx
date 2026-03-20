@@ -98,7 +98,7 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
 
       <button
         onClick={() => setShowAddProduct(true)}
-        className="fixed bottom-24 right-6 w-16 h-16 bg-green-600 text-white rounded-2xl shadow-[0_20px_50px_rgba(22,163,74,0.3)] flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-[80]"
+        className="fixed bottom-32 right-6 w-16 h-16 bg-green-600 text-white rounded-2xl shadow-[0_20px_50px_rgba(22,163,74,0.3)] flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-[80]"
       >
         <Plus size={32} strokeWidth={3} />
       </button>

@@ -393,10 +393,10 @@ function AppContent() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 font-sans pb-20">
+    <div className="min-h-screen bg-gray-50 font-sans pb-36">
       <Header shop={shop} lang={lang} setLang={setLang} />
       
-      <main className="p-4 max-w-md mx-auto">
+      <main className="p-4 pb-36 max-w-md mx-auto">
         <React.Suspense fallback={
           <div className="flex items-center justify-center py-20">
             <motion.div
@@ -455,7 +455,7 @@ function AppContent() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
             className={cn(
-              "fixed bottom-24 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-2xl z-[100] flex items-center gap-2 font-bold text-sm",
+              "fixed bottom-32 left-1/2 -translate-x-1/2 px-6 py-3 rounded-2xl shadow-2xl z-[100] flex items-center gap-2 font-bold text-sm",
               toast.type === "success" ? "bg-green-600 text-white" : "bg-red-600 text-white"
             )}
           >
