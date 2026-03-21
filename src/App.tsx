@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { User as UserIcon, Receipt, AlertCircle, CheckCircle2 } from "lucide-react";
+import { User as UserIcon, Receipt, AlertCircle, CheckCircle2, Languages } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, openWhatsApp } from "./utils/helpers";
 import {
@@ -339,7 +339,14 @@ function AppContent() {
 
   if (!user) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-green-600 p-6 text-white">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-green-600 p-6 text-white relative">
+        <button 
+          onClick={() => setLang(lang === "en" ? "hi" : "en")} 
+          className="absolute top-6 right-6 p-2 bg-white/20 hover:bg-white/30 rounded-xl text-white flex items-center gap-2 font-bold transition-all text-sm"
+        >
+          <Languages size={18} />
+          {lang === "en" ? "हिंदी" : "English"}
+        </button>
         <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center">
           <div className="w-20 h-20 bg-white rounded-2xl flex items-center justify-center text-green-600 mx-auto mb-6 shadow-xl">
             <Receipt size={48} />
@@ -370,8 +377,15 @@ function AppContent() {
 
   if (!shop) {
     return (
-      <div className="min-h-screen bg-gray-50 p-6">
-        <div className="max-w-md mx-auto">
+      <div className="min-h-screen bg-gray-50 p-6 relative">
+        <button 
+          onClick={() => setLang(lang === "en" ? "hi" : "en")} 
+          className="absolute top-6 right-6 p-2 bg-white border border-gray-200 hover:bg-gray-50 shadow-sm rounded-xl text-green-600 flex items-center gap-2 font-bold transition-all text-sm"
+        >
+          <Languages size={18} />
+          {lang === "en" ? "हिंदी" : "English"}
+        </button>
+        <div className="max-w-md mx-auto pt-16">
           <h2 className="text-2xl font-bold mb-6 text-gray-800">{t.createShop}</h2>
           <form onSubmit={handleCreateShop} className="space-y-4">
             <div>
@@ -447,7 +461,7 @@ function AppContent() {
           </motion.div>
         </React.Suspense>
 
-        <Footer onNavigate={(page) => setCurrentLegalPage(page)} />
+        {activeTab === "home" && <Footer onNavigate={(page) => setCurrentLegalPage(page)} />}
       </main>
 
       <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} t={t} />
