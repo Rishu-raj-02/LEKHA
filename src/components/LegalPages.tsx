@@ -82,7 +82,7 @@ export const ContactUs = ({ onBack }: { onBack: () => void }) => (
       <p className="text-lg font-medium text-gray-700">For any support, queries, or feedback, please reach out to us at:</p>
       <div className="mt-6 p-6 bg-gray-50 rounded-[2rem] border border-gray-100">
         <p className="text-xs font-bold text-gray-400 uppercase mb-1">Email Support</p>
-        <p className="text-xl font-black text-green-600">rishurajsingh419@gmail.com</p>
+        <p className="text-xl font-black text-green-600">lekhawebapp@gmail.com</p>
       </div>
     </section>
     <section>

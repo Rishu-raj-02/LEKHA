@@ -137,4 +137,4 @@ Lekha is currently in **Early Access**. We are continuously improving based on s
 
 Have suggestions or found a bug? We'd love to hear from you!
 
-Reach out at: **rishurajsingh419@gmail.com**
+Reach out at: **lekhawebapp@gmail.com**
