@@ -22,6 +22,8 @@ import { AppProvider, useApp } from "./context/AppContext";
 import { Header } from "./components/ui/Header";
 import { BottomNav } from "./components/ui/BottomNav";
 import { Modal } from "./components/ui/Modal";
+import { Footer } from "./components/ui/Footer";
+import { PrivacyPolicy, TermsAndConditions, RefundPolicy, ContactUs } from "./components/LegalPages";
 
 const Home = React.lazy(() => import("./components/Home").then(m => ({ default: m.Home })));
 const Customers = React.lazy(() => import("./components/Customers").then(m => ({ default: m.Customers })));
@@ -36,6 +38,7 @@ function AppContent() {
   const t = translations[lang];
 
   const [activeTab, setActiveTab] = useState("home");
+  const [currentLegalPage, setCurrentLegalPage] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
 
@@ -443,9 +446,28 @@ function AppContent() {
             {activeTab === "profile" && <Profile setShowEditProfile={setShowEditProfile} />}
           </motion.div>
         </React.Suspense>
+
+        <Footer onNavigate={(page) => setCurrentLegalPage(page)} />
       </main>
 
       <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} t={t} />
+
+      {/* Legal Pages Overlay */}
+      <AnimatePresence>
+        {currentLegalPage && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-white overflow-y-auto"
+          >
+            {currentLegalPage === 'privacy' && <PrivacyPolicy onBack={() => setCurrentLegalPage(null)} />}
+            {currentLegalPage === 'terms' && <TermsAndConditions onBack={() => setCurrentLegalPage(null)} />}
+            {currentLegalPage === 'refund' && <RefundPolicy onBack={() => setCurrentLegalPage(null)} />}
+            {currentLegalPage === 'contact' && <ContactUs onBack={() => setCurrentLegalPage(null)} />}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Toast Notification */}
       <AnimatePresence>
