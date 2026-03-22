@@ -25,6 +25,8 @@ import { Modal } from "./components/ui/Modal";
 import { Footer } from "./components/ui/Footer";
 import { PrivacyPolicy, TermsAndConditions, RefundPolicy, ContactUs } from "./components/LegalPages";
 
+import { PricingModal } from "./components/ui/PricingModal";
+
 const Home = React.lazy(() => import("./components/Home").then(m => ({ default: m.Home })));
 const Customers = React.lazy(() => import("./components/Customers").then(m => ({ default: m.Customers })));
 const Billing = React.lazy(() => import("./components/Billing").then(m => ({ default: m.Billing })));
@@ -34,7 +36,7 @@ const Profile = React.lazy(() => import("./components/Profile").then(m => ({ def
 const Insights = React.lazy(() => import("./components/Insights").then(m => ({ default: m.Insights })));
 
 function AppContent() {
-  const { user, shop, loading, lang, setLang, customers, setShop, error, login } = useApp();
+  const { user, shop, loading, lang, setLang, customers, setShop, error, login, isProUser, isPlanExpired, checkWhatsAppLimit } = useApp();
   const t = translations[lang];
 
   const [activeTab, setActiveTab] = useState("home");
@@ -300,7 +302,12 @@ function AppContent() {
           message = `नमस्ते ${customer.name},\n\n*बिल विवरण*\n\n*${shop.shop_name}* से खरीदारी करने के लिए धन्यवाद।\n\n*सामान:*\n\n${itemsList}\n--------------------------------\n\n*कुल राशि: Rs ${total}*\n*भुगतान स्थिति: ${statusText}*\n\n${footerText}\n\n--------------------------------\n\nधन्यवाद।\n\n*${shop.shop_name}*`;
         }
 
-        openWhatsApp(customer.phone, message);
+        const canSend = await checkWhatsAppLimit();
+        if (canSend) {
+          openWhatsApp(customer.phone, message);
+        } else {
+          setToast({ message: "Free plan limit reached (10/day). Upgrade to Pro!", type: "error" });
+        }
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `shops/${user.uid}/bills`);
@@ -404,6 +411,67 @@ function AppContent() {
               {t.save}
             </button>
           </form>
+        </div>
+      </div>
+    );
+  }
+
+  if (shop && !shop.planType) {
+    return <PricingModal onPlanSelected={() => setActiveTab("home")} />;
+  }
+
+  if (shop && isPlanExpired && shop.planType === "pro") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6 relative">
+        <button 
+          onClick={() => setLang(lang === "en" ? "hi" : "en")} 
+          className="absolute top-6 right-6 p-2 bg-white border border-gray-200 hover:bg-gray-50 shadow-sm rounded-xl text-green-600 flex items-center gap-2 font-bold transition-all text-sm"
+        >
+          <Languages size={18} />
+          {lang === "en" ? "हिंदी" : "English"}
+        </button>
+        <div className="bg-white p-8 rounded-[2rem] max-w-sm w-full text-center shadow-xl border border-gray-100">
+          <div className="w-20 h-20 bg-red-50 text-red-500 rounded-[1.5rem] mx-auto flex items-center justify-center mb-6">
+            <AlertCircle size={40} />
+          </div>
+          <h2 className="text-2xl font-black text-gray-800 mb-3">Plan Expired</h2>
+          <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">Your 1-month plan has expired.<br/>Renew to continue Pro features.</p>
+          <div className="space-y-4">
+             <button 
+                onClick={() => {
+                  const options = {
+                    key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+                    amount: 4900,
+                    currency: "INR",
+                    name: t.appName,
+                    description: "Pro Subscription Renewal",
+                    handler: async function (response: any) {
+                      const planStart = Timestamp.now();
+                      const expiryDate = new Date();
+                      expiryDate.setDate(expiryDate.getDate() + 30);
+                      const planExpiry = Timestamp.fromDate(expiryDate);
+                      await updateDoc(doc(db, "shops", user!.uid), { isPro: true, planType: "pro", planStart, planExpiry });
+                      setShop({ ...shop, isPro: true, planType: "pro", planStart, planExpiry });
+                    },
+                    prefill: { name: shop.owner_name, email: user!.email, contact: shop.phone },
+                    theme: { color: "#16a34a" }
+                  };
+                  new (window as any).Razorpay(options).open();
+                }}
+                className="w-full bg-green-600 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-green-700 active:scale-[0.98] transition-all"
+             >
+               Renew Now
+             </button>
+             <button 
+                onClick={async () => {
+                  await updateDoc(doc(db, "shops", user!.uid), { planType: "free", isPro: false });
+                  setShop({ ...shop, planType: "free", isPro: false });
+                }}
+                className="w-full bg-gray-100 text-gray-700 font-bold py-4 rounded-2xl hover:bg-gray-200 active:scale-[0.98] transition-all"
+             >
+               Continue Free
+             </button>
+          </div>
         </div>
       </div>
     );

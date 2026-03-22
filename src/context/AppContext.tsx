@@ -7,6 +7,7 @@ import {
   collection,
   doc,
   getDoc,
+  updateDoc,
   onSnapshot,
   query,
   where,
@@ -31,6 +32,9 @@ interface AppContextType {
   error: string | null;
   login: () => Promise<void>;
   logout: () => Promise<void>;
+  isProUser: boolean;
+  isPlanExpired: boolean;
+  checkWhatsAppLimit: () => Promise<boolean>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -143,6 +147,51 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, []);
 
+  const isProUser = React.useMemo(() => {
+    if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return true;
+    if (!shop) return false;
+    
+    if (shop.isPro && shop.planExpiry) {
+      const expiryMs = shop.planExpiry?.toDate ? shop.planExpiry.toDate().getTime() : new Date(shop.planExpiry).getTime();
+      if (Date.now() <= expiryMs) return true;
+    }
+    return false;
+  }, [user, shop]);
+
+  const isPlanExpired = React.useMemo(() => {
+    if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return false;
+    if (!shop) return false;
+    
+    if (shop.isPro && shop.planExpiry) {
+      const expiryMs = shop.planExpiry?.toDate ? shop.planExpiry.toDate().getTime() : new Date(shop.planExpiry).getTime();
+      if (Date.now() > expiryMs) return true;
+    }
+    return false;
+  }, [user, shop]);
+
+  const checkWhatsAppLimit = React.useCallback(async () => {
+    if (isProUser) return true;
+    if (!user || !shop) return false;
+    
+    const todayStr = new Date().toDateString();
+    let currentCount = shop.whatsappCount || 0;
+    if (shop.lastWhatsappDate !== todayStr) currentCount = 0;
+    
+    if (currentCount >= 10) return false;
+    
+    try {
+      await updateDoc(doc(db, "shops", user.uid), {
+        whatsappCount: currentCount + 1,
+        lastWhatsappDate: todayStr
+      });
+      setShop({ ...shop, whatsappCount: currentCount + 1, lastWhatsappDate: todayStr });
+      return true;
+    } catch (err) {
+      console.error("WhatsApp Limit Update Error:", err);
+      return false;
+    }
+  }, [isProUser, shop, user, setShop]);
+
   const contextValue = React.useMemo(() => ({
     user,
     shop,
@@ -157,7 +206,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     error,
     login,
     logout: handleLogout,
-  }), [user, shop, loading, lang, customers, products, bills, udharList, error, login, handleLogout]);
+    isProUser,
+    isPlanExpired,
+    checkWhatsAppLimit
+  }), [user, shop, loading, lang, customers, products, bills, udharList, error, login, handleLogout, isProUser, isPlanExpired, checkWhatsAppLimit]);
 
   return (
     <AppContext.Provider value={contextValue}>

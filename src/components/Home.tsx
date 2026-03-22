@@ -23,7 +23,7 @@ interface HomeProps {
 }
 
 export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUdhar, handleMarkPaid, isMarkingPaidId }: HomeProps) => {
-  const { shop, lang, bills, customers, udharList } = useApp();
+  const { shop, lang, bills, customers, udharList, checkWhatsAppLimit } = useApp();
   const t = translations[lang];
 
   const today = new Date();
@@ -102,7 +102,12 @@ export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUd
                 </div>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => {
+                    onClick={async () => {
+                      const canSend = await checkWhatsAppLimit();
+                      if (!canSend) {
+                        alert("Free plan limit reached (10/day). Upgrade to Pro!");
+                        return;
+                      }
                       const message = `Hello ${customer?.name},\nYour ₹${udhar.amount} is pending. Please complete your payment.\n\n* ${shop?.shop_name}`;
                       openWhatsApp(customer?.phone || "", message);
                     }}
@@ -130,56 +135,6 @@ export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUd
         </div>
       </div>
 
-      {/* PRICING SECTION */}
-      <div className="mt-10 pt-8 border-t border-gray-100 pb-4">
-        <div className="text-center mb-6">
-          <h2 className="text-2xl font-black text-gray-800">💰 {t.pricingTitle || "Pricing"}</h2>
-          <p className="text-sm text-gray-500 mt-1">{t.pricingSubtitle}</p>
-        </div>
-
-        <div className="space-y-5">
-          {/* Free Plan */}
-          <div className="bg-white p-6 rounded-3xl border border-gray-200 shadow-sm relative overflow-hidden">
-            <h3 className="text-lg font-bold text-gray-800">{t.freePlan}</h3>
-            <div className="mt-2 mb-4">
-              <span className="text-4xl font-black text-gray-900">₹0</span>
-            </div>
-            <ul className="space-y-3 text-sm text-gray-600">
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-500" /> Customer Management</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-500" /> Basic Billing</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-500" /> Udhar Tracking</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-gray-400" /> Limited WhatsApp (10/day)</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-gray-400" /> Basic Dashboard</li>
-            </ul>
-          </div>
-
-          {/* Pro Plan */}
-          <div className="bg-green-50 p-6 rounded-3xl border-2 border-green-500 overflow-hidden relative shadow-md">
-            <div className="absolute top-0 right-0 bg-green-500 text-white text-[10px] font-bold px-4 py-1.5 rounded-bl-2xl">
-              🔥 {t.mostPopular}
-            </div>
-            <h3 className="text-lg font-bold text-green-800">{t.proPlan}</h3>
-            <div className="mt-2 mb-4 flex items-end gap-1">
-              <span className="text-4xl font-black text-green-700">₹49</span>
-              <span className="text-sm text-green-600 font-medium pb-1">/month</span>
-            </div>
-            <ul className="space-y-3 text-sm text-green-800 mb-6 font-medium">
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-600" /> Insights (Analytics Dashboard)</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-600" /> Unlimited WhatsApp Messages</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-600" /> Payment Reminders</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-600" /> Sales History</li>
-              <li className="flex items-center gap-3"><CheckCircle2 size={18} className="text-green-600" /> Top Customers & Item Insights</li>
-            </ul>
-            
-            <button className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg hover:bg-green-700 transition-all flex justify-center items-center gap-2">
-              🚀 {t.upgradeToPro}
-            </button>
-            <p className="text-center text-xs text-green-600 mt-3 font-medium opacity-80">
-              {t.freeTrialMsg}
-            </p>
-          </div>
-        </div>
-      </div>
     </div>
   );
 });

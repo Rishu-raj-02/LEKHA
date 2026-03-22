@@ -9,15 +9,18 @@ import {
   Package, 
   AlertCircle,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Lock,
+  Crown
 } from "lucide-react";
+import { db, doc, updateDoc, Timestamp } from "../firebase";
 import { motion } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { translations } from "../translations";
 import { cn } from "../utils/helpers";
 
 export const Insights = React.memo(() => {
-  const { bills, udharList, customers, products, lang } = useApp();
+  const { bills, udharList, customers, products, lang, isProUser, user, shop, setShop } = useApp();
   const t = translations[lang];
 
   // --- Helper: Get Start of Today ---
@@ -156,6 +159,55 @@ export const Insights = React.memo(() => {
   }, [stats.earnings, yesterday, bills, today, t, udharAnalysis, topPerformers.items]);
 
   const maxWeekly = Math.max(...weeklyTrend.map(t => t.total), 1);
+
+  if (!isProUser) {
+    const openRazorpayCheckout = () => {
+      const options = {
+        key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+        amount: 4900,
+        currency: "INR",
+        name: t.appName || "Lekha",
+        description: "Pro Subscription (1 Month)",
+        handler: async function (response: any) {
+          try {
+            const planStart = Timestamp.now();
+            const expiryDate = new Date();
+            expiryDate.setDate(expiryDate.getDate() + 30);
+            const planExpiry = Timestamp.fromDate(expiryDate);
+            await updateDoc(doc(db, "shops", user!.uid), { isPro: true, planType: "pro", planStart, planExpiry });
+            setShop({ ...shop!, isPro: true, planType: "pro", planStart, planExpiry });
+          } catch (error) {
+            console.error(error);
+          }
+        },
+        prefill: { name: shop?.owner_name, email: user?.email, contact: shop?.phone },
+        theme: { color: "#16a34a" }
+      };
+      new (window as any).Razorpay(options).open();
+    };
+
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center p-4 relative">
+        <div className="absolute inset-0 pointer-events-none overflow-hidden opacity-30 blur-md bg-gray-50 flex flex-col gap-4 p-4">
+           <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm h-64 w-full"></div>
+           <div className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm h-48 w-full"></div>
+        </div>
+        <div className="relative z-10 bg-white p-8 rounded-[2rem] max-w-sm w-full text-center shadow-xl border border-gray-100 flex flex-col items-center">
+          <div className="w-20 h-20 bg-green-50 text-green-600 rounded-[1.5rem] mx-auto flex items-center justify-center mb-6 shadow-sm border-2 border-green-100">
+            <Lock size={40} />
+          </div>
+          <h2 className="text-2xl font-black text-gray-800 mb-3">Premium Feature</h2>
+          <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">Unlock advanced analytics, unlimited WhatsApp messages, and smart insights by upgrading to Pro.</p>
+          <button 
+            onClick={openRazorpayCheckout}
+            className="w-full bg-green-600 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-green-700 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+          >
+            <Crown size={20} /> Upgrade for ₹49
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 pb-24">

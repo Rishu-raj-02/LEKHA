@@ -4,6 +4,12 @@ export interface Shop {
   owner_name: string;
   phone: string;
   created_at: any;
+  isPro?: boolean;
+  planType?: "free" | "pro";
+  planStart?: any;
+  planExpiry?: any;
+  whatsappCount?: number;
+  lastWhatsappDate?: string;
 }
 
 export interface Customer {
