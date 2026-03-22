@@ -9,7 +9,7 @@ import {
   CheckCircle2
 } from "lucide-react";
 import { useApp } from "../context/AppContext";
-import { cn, openWhatsApp } from "../utils/helpers";
+import { cn, openWhatsApp, ensureDate } from "../utils/helpers";
 import { Udhar } from "../types";
 import { translations } from "../translations";
 import { motion } from "motion/react";
@@ -28,8 +28,8 @@ export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUd
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const todayBills = bills.filter(b => b.created_at?.toDate && b.created_at.toDate() >= today);
-  const todaySales = todayBills.reduce((acc, b) => acc + b.total_amount, 0);
+  const todayBills = bills.filter(b => ensureDate(b.created_at) >= today);
+  const todaySales = todayBills.reduce((acc, b) => acc + (b.total_amount || 0), 0);
   const totalUdhar = customers.reduce((acc, c) => acc + (c.total_udhar || 0), 0);
 
   return (

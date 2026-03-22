@@ -1,4 +1,4 @@
-import { Home, Users, Receipt, History, Package, User as UserIcon, TrendingUp } from "lucide-react";
+import { Home, Users, Receipt, History, Package, User as UserIcon, TrendingUp, FileText } from "lucide-react";
 import { cn } from "../../utils/helpers";
 
 export const BottomNav = ({ activeTab, setActiveTab, t }: { activeTab: string; setActiveTab: (t: string) => void; t: any }) => {
@@ -8,6 +8,7 @@ export const BottomNav = ({ activeTab, setActiveTab, t }: { activeTab: string; s
     { id: "billing", icon: Receipt, label: t.billing },
     { id: "udhar", icon: History, label: t.udhar },
     { id: "insights", icon: TrendingUp, label: t.insights },
+    { id: "reports", icon: FileText, label: t.reports || "Reports" },
     { id: "items", icon: Package, label: t.items },
     { id: "profile", icon: UserIcon, label: t.profile },
   ];

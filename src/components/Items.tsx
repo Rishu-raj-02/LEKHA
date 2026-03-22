@@ -11,7 +11,7 @@ interface ItemsProps {
 }
 
 export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
-  const { products, lang } = useApp();
+  const { products, lang, isProUser } = useApp();
   const t = translations[lang];
 
   const [search, setSearch] = useState("");
@@ -82,15 +82,42 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
               <div className="w-10 h-10 bg-gray-50 rounded-xl flex items-center justify-center text-gray-400 mb-3">
                 <Package size={20} />
               </div>
-              <p className="font-bold text-gray-800 text-sm mb-1">
-                <HighlightedText text={p.name} highlight={debouncedSearch} />
-              </p>
-              <p className="text-green-600 font-black">₹{p.price}</p>
-              {p.category && (
-                <p className="text-[10px] text-gray-400 mt-2 uppercase font-bold">
-                  <HighlightedText text={p.category} highlight={debouncedSearch} />
+              <div className="flex justify-between items-start">
+                <p className="font-bold text-gray-800 text-sm mb-1">
+                  <HighlightedText text={p.name} highlight={debouncedSearch} />
                 </p>
-              )}
+                {isProUser && typeof p.stockQuantity === 'number' && p.stockQuantity < (p.minStock || 0) && (
+                  <span className="text-[9px] font-bold bg-red-100 text-red-600 px-2 py-0.5 rounded-full whitespace-nowrap">
+                    Low Stock
+                  </span>
+                )}
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <p className="text-green-600 font-black">₹{p.price}</p>
+                {isProUser && p.sellingType === 'variable' && (
+                  <span className="text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-bold uppercase">Var</span>
+                )}
+              </div>
+
+              <div className="flex justify-between items-end mt-2">
+                {p.category ? (
+                  <p className="text-[10px] text-gray-400 uppercase font-bold">
+                    <HighlightedText text={p.category} highlight={debouncedSearch} />
+                  </p>
+                ) : <div/>}
+
+                {isProUser && (
+                  <div className="text-right">
+                    {typeof p.costPrice === 'number' && p.costPrice > 0 && (
+                      <p className="text-[9px] text-gray-400 font-bold uppercase">CP: ₹{p.costPrice}</p>
+                    )}
+                    {typeof p.stockQuantity === 'number' && (
+                      <p className="text-[10px] text-gray-600 font-bold">{p.stockQuantity} in stock</p>
+                    )}
+                  </div>
+                )}
+              </div>
             </motion.div>
           ))}
         </div>

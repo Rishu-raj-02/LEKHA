@@ -25,6 +25,11 @@ export interface Product {
   name: string;
   price: number;
   category?: string;
+  stockQuantity?: number;
+  costPrice?: number;
+  sellingType?: "fixed" | "variable";
+  lastUsedPrice?: number;
+  minStock?: number;
 }
 
 export interface Bill {
@@ -32,7 +37,11 @@ export interface Bill {
   customer_id: string;
   customer_name?: string;
   total_amount: number;
+  total_cost?: number;
+  total_profit?: number;
   created_at: any;
+  items?: BillItem[]; 
+  isArchived?: boolean;
 }
 
 export interface BillItem {
@@ -40,6 +49,7 @@ export interface BillItem {
   product_name: string;
   price: number;
   quantity: number;
+  cost_price?: number;
 }
 
 export interface Udhar {
@@ -50,4 +60,27 @@ export interface Udhar {
   status: "pending" | "paid";
   due_date?: string;
   created_at: any;
+}
+
+export interface Expense {
+  id: string; 
+  electricity: number;
+  rent: number;
+  staff: number;
+  other: number;
+  updated_at?: any;
+}
+
+export interface MonthlyReport {
+  id: string; 
+  monthStr: string; 
+  totalSales: number;
+  totalProfit: number;
+  totalBills: number;
+  bestItem: { name: string; profit: number };
+  worstItem: { name: string; profit: number };
+  profitTrend: { dateStr: string; profit: number }[];
+  comparisonWithLastMonth: number;
+  createdAt: any;
+  templateVersion: string;
 }

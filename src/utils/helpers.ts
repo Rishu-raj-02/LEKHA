@@ -25,3 +25,16 @@ export const openWhatsApp = (phone: string, message: string) => {
   }
   window.open(`https://wa.me/${finalPhone}?text=${encoded}`, "_blank");
 };
+
+export const ensureDate = (val: any): Date => {
+  if (!val) return new Date();
+  // Case 1: Firestore Timestamp with .toDate()
+  if (typeof val.toDate === "function") return val.toDate();
+  // Case 2: Serialized Timestamp object from local storage {seconds, nanoseconds}
+  if (val && typeof val.seconds === "number") return new Date(val.seconds * 1000);
+  // Case 3: Already a Date object
+  if (val instanceof Date) return val;
+  // Case 4: String or milliseconds
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? new Date() : d;
+};

@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { AlertCircle, ChevronUp, ChevronDown, CheckCircle2, Phone, MessageCircle, Plus } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp } from "../context/AppContext";
-import { cn, openWhatsApp } from "../utils/helpers";
+import { cn, openWhatsApp, ensureDate } from "../utils/helpers";
 import { Udhar } from "../types";
 import { translations } from "../translations";
 
@@ -105,7 +105,7 @@ export const UdharTab = React.memo(({ setShowAddUdhar, handleMarkPaid, setToast,
                           <div>
                             <p className="font-bold text-gray-800">₹{entry.amount}</p>
                             <div className="flex items-center gap-2">
-                              <p className="text-[10px] text-gray-400">{entry.created_at.toDate().toLocaleDateString()}</p>
+                              <p className="text-[10px] text-gray-400">{ensureDate(entry.created_at).toLocaleDateString()}</p>
                               {entry.due_date && (
                                 <span className="text-[10px] bg-red-50 text-red-600 px-2 py-0.5 rounded-full font-bold">
                                   {t.dueDate}: {new Date(entry.due_date).toLocaleDateString()}

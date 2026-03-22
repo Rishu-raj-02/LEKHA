@@ -34,9 +34,10 @@ const UdharComp = React.lazy(() => import("./components/Udhar").then(m => ({ def
 const Items = React.lazy(() => import("./components/Items").then(m => ({ default: m.Items })));
 const Profile = React.lazy(() => import("./components/Profile").then(m => ({ default: m.Profile })));
 const Insights = React.lazy(() => import("./components/Insights").then(m => ({ default: m.Insights })));
+const Reports = React.lazy(() => import("./components/Reports").then(m => ({ default: m.Reports })));
 
 function AppContent() {
-  const { user, shop, loading, lang, setLang, customers, setShop, error, login, isProUser, isPlanExpired, checkWhatsAppLimit } = useApp();
+  const { user, shop, loading, lang, setLang, customers, products, setShop, error, login, isProUser, isPlanExpired, checkWhatsAppLimit, showReportPopup, dismissReportPopup } = useApp();
   const t = translations[lang];
 
   const [activeTab, setActiveTab] = useState("home");
@@ -172,6 +173,11 @@ function AppContent() {
       name: formData.get("name") as string,
       price: Number(formData.get("price")),
       category: formData.get("category") as string,
+      stockQuantity: isProUser ? Number(formData.get("stockQuantity") || 0) : 0,
+      costPrice: isProUser ? Number(formData.get("costPrice") || 0) : 0,
+      sellingType: isProUser ? (formData.get("sellingType") as string || "fixed") : "fixed",
+      minStock: isProUser ? Number(formData.get("minStock") || 0) : 0,
+      lastUsedPrice: Number(formData.get("price")),
     };
 
     setIsAddingProduct(true);
@@ -246,10 +252,6 @@ function AppContent() {
 
   const handleCreateBill = async (customerId: string, items: { name: string; price: number; quantity: number }[], billStatus: "paid" | "pending", billLang: "en" | "hi") => {
     if (!user || !shop) return;
-    if (!customerId) {
-      setToast({ message: t.selectCustomer, type: "error" });
-      return;
-    }
     if (items.length === 0) {
       setToast({ message: t.noItems, type: "error" });
       return;
@@ -257,18 +259,34 @@ function AppContent() {
 
     setIsSavingBill(true);
     const total = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
+    
+    // Inventory & Profit Calculations
+    let total_cost = 0;
+    const itemsData = items.map(i => {
+      const p = products.find(prod => prod.name === i.name);
+      const cp = p?.costPrice || 0;
+      total_cost += cp * i.quantity;
+      return { product_name: i.name, price: i.price, quantity: i.quantity, cost_price: cp };
+    });
+    const total_profit = total - total_cost;
+
+    const customerName = customerId ? (customers.find(c => c.id === customerId)?.name || "Customer") : "Walk-in Customer";
+
     const billData = {
-      customer_id: customerId,
+      customer_id: customerId || "walk-in",
+      customer_name: customerName,
       total_amount: total,
+      total_cost,
+      total_profit,
       status: billStatus,
-      items: items.map(i => ({ product_name: i.name, price: i.price, quantity: i.quantity })),
+      items: itemsData,
       created_at: Timestamp.now(),
     };
 
     try {
       await addDoc(collection(db, "shops", user.uid, "bills"), billData);
       
-      if (billStatus === "pending") {
+      if (billStatus === "pending" && customerId) {
         await addDoc(collection(db, "shops", user.uid, "udhar"), {
           customer_id: customerId,
           amount: total,
@@ -281,6 +299,26 @@ function AppContent() {
         if (customerDoc.exists()) {
           const currentUdhar = customerDoc.data().total_udhar || 0;
           await updateDoc(customerRef, { total_udhar: currentUdhar + total });
+        }
+      }
+      
+      // Update inventory stock and last prices
+      if (isProUser) {
+        for (const i of items) {
+          const p = products.find(prod => prod.name === i.name);
+          if (p && p.id) {
+            const productRef = doc(db, "shops", user.uid, "products", p.id);
+            const updates: any = {};
+            if (p.stockQuantity !== undefined) {
+              updates.stockQuantity = Math.max(0, p.stockQuantity - i.quantity);
+            }
+            if (p.sellingType === "variable") {
+              updates.lastUsedPrice = i.price;
+            }
+            if (Object.keys(updates).length > 0) {
+              await updateDoc(productRef, updates).catch(console.error);
+            }
+          }
         }
       }
       
@@ -524,6 +562,7 @@ function AppContent() {
               />
             )}
             {activeTab === "insights" && <Insights />}
+            {activeTab === "reports" && <Reports />}
             {activeTab === "items" && <Items setShowAddProduct={setShowAddProduct} />}
             {activeTab === "profile" && <Profile setShowEditProfile={setShowEditProfile} />}
           </motion.div>
@@ -533,6 +572,55 @@ function AppContent() {
       </main>
 
       <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} t={t} />
+
+      {/* Monthly Report Popup */}
+      <AnimatePresence>
+        {showReportPopup && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-center justify-center p-6"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="bg-white rounded-[2rem] p-6 max-w-sm w-full shadow-2xl text-center"
+            >
+              <div className="text-5xl mb-4">📊</div>
+              <h2 className="text-xl font-black text-gray-800 mb-2">{t.reportReady || "Your Monthly Report is Ready!"}</h2>
+              <p className="text-sm text-gray-500 font-medium mb-1">{showReportPopup.monthStr}</p>
+              <div className="grid grid-cols-3 gap-2 my-4">
+                <div className="bg-green-50 p-2 rounded-xl">
+                  <p className="text-[8px] font-bold text-green-600 uppercase">{t.totalSalesMonth || "Sales"}</p>
+                  <p className="text-sm font-black text-green-700">₹{showReportPopup.totalSales}</p>
+                </div>
+                <div className="bg-blue-50 p-2 rounded-xl">
+                  <p className="text-[8px] font-bold text-blue-600 uppercase">{t.totalProfitMonth || "Profit"}</p>
+                  <p className="text-sm font-black text-blue-700">₹{showReportPopup.totalProfit}</p>
+                </div>
+                <div className="bg-purple-50 p-2 rounded-xl">
+                  <p className="text-[8px] font-bold text-purple-600 uppercase">{t.totalBillsMonth || "Bills"}</p>
+                  <p className="text-sm font-black text-purple-700">{showReportPopup.totalBills}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { dismissReportPopup(); setActiveTab('reports'); }}
+                className="w-full bg-green-600 text-white font-black py-3 rounded-2xl shadow-lg mb-2 active:scale-[0.98] transition-all"
+              >
+                👁 {t.viewReport || "View Full Report"}
+              </button>
+              <button
+                onClick={dismissReportPopup}
+                className="w-full bg-gray-100 text-gray-600 font-bold py-3 rounded-2xl active:scale-[0.98] transition-all"
+              >
+                {t.cancel || "Close"}
+              </button>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Legal Pages Overlay */}
       <AnimatePresence>
@@ -583,9 +671,51 @@ function AppContent() {
       <Modal isOpen={showAddProduct} onClose={() => setShowAddProduct(false)} title={t.addItem}>
         <form onSubmit={handleAddProduct} className="space-y-4">
           <input name="name" required placeholder={t.name} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
-          <input name="price" type="number" required placeholder={t.price} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
-          <input name="category" placeholder={t.category} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
-          <button disabled={isAddingProduct} type="submit" className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-center gap-2">
+          <div className="grid grid-cols-2 gap-2">
+            <input name="price" type="number" required placeholder={t.price} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+            <input name="category" placeholder={t.category} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+          </div>
+
+          <div className="relative">
+            {!isProUser && (
+              <div className="absolute inset-0 z-10 bg-white/60 backdrop-blur-sm flex items-center justify-center rounded-2xl border border-gray-100">
+                <span className="text-xs font-bold text-gray-800 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-100 flex items-center gap-1">
+                  <span className="text-green-600">👑</span> Upgrade to unlock Inventory
+                </span>
+              </div>
+            )}
+            <div className="bg-gray-50 p-4 rounded-2xl grid grid-cols-2 gap-3 border border-gray-100">
+              <div className="col-span-2 flex justify-between items-center text-xs font-bold text-gray-500 mb-1">
+                <span>INVENTORY SETTINGS</span>
+                <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded uppercase text-[9px] tracking-wider">PRO</span>
+              </div>
+              
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-gray-400 uppercase">Pricing Type</label>
+                <select name="sellingType" className="w-full p-3 rounded-xl bg-white border-none outline-none text-xs font-bold">
+                  <option value="fixed">Fixed Price</option>
+                  <option value="variable">Variable Price</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-gray-400 uppercase">Cost Price (CP)</label>
+                <input name="costPrice" type="number" placeholder="₹0" className="w-full p-3 rounded-xl bg-white border-none outline-none text-xs font-bold" />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-gray-400 uppercase">Current Stock</label>
+                <input name="stockQuantity" type="number" placeholder="Qty" className="w-full p-3 rounded-xl bg-white border-none outline-none text-xs font-bold" />
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold text-gray-400 uppercase">Min Stock Alert</label>
+                <input name="minStock" type="number" placeholder="Min" defaultValue={5} className="w-full p-3 rounded-xl bg-white border-none outline-none text-xs font-bold" />
+              </div>
+            </div>
+          </div>
+
+          <button disabled={isAddingProduct} type="submit" className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 mt-4">
             {isAddingProduct ? <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" /> : t.save}
           </button>
         </form>
