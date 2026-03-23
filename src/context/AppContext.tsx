@@ -41,6 +41,7 @@ interface AppContextType {
   isProUser: boolean;
   isPlanExpired: boolean;
   checkWhatsAppLimit: () => Promise<boolean>;
+  checkBillViewLimit: () => Promise<boolean>;
   showReportPopup: MonthlyReport | null;
   dismissReportPopup: () => void;
 }
@@ -316,6 +317,29 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [isProUser, shop, user, setShop]);
 
+  const checkBillViewLimit = React.useCallback(async () => {
+    if (isProUser) return true;
+    if (!user || !shop) return false;
+    
+    const todayStr = new Date().toDateString();
+    let currentCount = shop.billViewCount || 0;
+    if (shop.lastBillViewDate !== todayStr) currentCount = 0;
+    
+    if (currentCount >= 10) return false;
+    
+    try {
+      await updateDoc(doc(db, "shops", user.uid), {
+        billViewCount: currentCount + 1,
+        lastBillViewDate: todayStr
+      });
+      setShop({ ...shop, billViewCount: currentCount + 1, lastBillViewDate: todayStr });
+      return true;
+    } catch (err) {
+      console.error("Bill View Limit Update Error:", err);
+      return false;
+    }
+  }, [isProUser, shop, user, setShop]);
+
   const contextValue = React.useMemo(() => ({
     user,
     shop,
@@ -334,9 +358,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     isProUser,
     isPlanExpired,
     checkWhatsAppLimit,
+    checkBillViewLimit,
     showReportPopup,
     dismissReportPopup
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkWhatsAppLimit, showReportPopup, dismissReportPopup]);
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkWhatsAppLimit, checkBillViewLimit, showReportPopup, dismissReportPopup]);
 
   return (
     <AppContext.Provider value={contextValue}>

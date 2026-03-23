@@ -21,7 +21,7 @@ interface BillingProps {
 }
 
 export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, handleCreateBill, isSavingBill }: BillingProps) => {
-  const { customers, products, shop, lang, isProUser } = useApp();
+  const { customers, products, shop, lang, isProUser, checkBillViewLimit, checkWhatsAppLimit } = useApp();
   const t = translations[lang];
 
   const [selectedCustomer, setSelectedCustomer] = useState("");
@@ -599,6 +599,12 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
                       setLocalToast("Please enter a valid phone number");
                       return;
                     }
+
+                    const canSend = await checkWhatsAppLimit();
+                    if (!canSend) {
+                      setLocalToast("WhatsApp limit reached (10/day). Upgrade to Pro!");
+                      return;
+                    }
                     
                     setIsGeneratingBill(true);
                     setShowWhatsAppPhonePrompt(false);
@@ -663,11 +669,17 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
               </div>
 
               <div className="flex justify-center mb-6 border border-gray-200 bg-gray-50 p-4 rounded-3xl max-h-[50vh] overflow-y-auto no-scrollbar relative">
-                {!isProUser && (
-                  <div className="absolute inset-0 z-10 bg-white/50 backdrop-blur-[2px] flex items-center justify-center">
-                    <span className="text-sm font-bold text-gray-800 bg-white px-4 py-2 rounded-full shadow-lg border border-gray-100">
-                      👑 Upgrade to unlock Professional Bills
-                    </span>
+                {!isProUser && (shop?.billViewCount || 0) >= 10 && (shop?.lastBillViewDate === new Date().toDateString()) && (
+                  <div className="absolute inset-0 z-10 bg-white/50 backdrop-blur-[2px] flex items-center justify-center text-center p-6">
+                    <div className="bg-white p-6 rounded-3xl shadow-xl border border-gray-100">
+                      <p className="text-sm font-bold text-gray-800 mb-4 tracking-tight">👑 Daily Limit Reached (10/10)</p>
+                      <button 
+                        onClick={() => {/* Trigger Upgrade Modal - usually handled in App.tsx or similar */}}
+                        className="text-xs font-black text-green-600 uppercase border-b-2 border-green-600"
+                      >
+                        Upgrade to Pro
+                      </button>
+                    </div>
                   </div>
                 )}
                 <div className="origin-top" style={{ transform: 'scale(0.75)' }}>
@@ -683,7 +695,14 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
 
               <button
                 onClick={async () => {
-                  if (!isProUser || !billTemplateRef.current) return;
+                  if (!isProUser) {
+                    const canView = await checkBillViewLimit();
+                    if (!canView) {
+                      setLocalToast("Daily limit reached. Upgrade to Pro!");
+                      return;
+                    }
+                  }
+                  if (!billTemplateRef.current) return;
                   setIsGeneratingBill(true);
                   try {
                     const html2canvas = (await import('html2canvas')).default;

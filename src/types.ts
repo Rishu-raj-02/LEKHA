@@ -10,6 +10,8 @@ export interface Shop {
   planExpiry?: any;
   whatsappCount?: number;
   lastWhatsappDate?: string;
+  billViewCount?: number;
+  lastBillViewDate?: string;
 }
 
 export interface Customer {
