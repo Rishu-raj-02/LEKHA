@@ -18,9 +18,10 @@ interface BillingProps {
     billLang: "en" | "hi"
   ) => Promise<void>;
   isSavingBill: boolean;
+  setShowPricing: (v: boolean) => void;
 }
 
-export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, handleCreateBill, isSavingBill }: BillingProps) => {
+export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, handleCreateBill, isSavingBill, setShowPricing }: BillingProps) => {
   const { customers, products, shop, lang, isProUser, checkBillViewLimit, checkWhatsAppLimit } = useApp();
   const t = translations[lang];
 
@@ -436,77 +437,84 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
              <p className="text-2xl font-black text-green-600">₹{total}</p>
           </div>
           <div className="space-y-2 relative">
-            {!isProUser && (
-                <div className="absolute inset-0 z-10 bg-white/60 backdrop-blur-[1px] flex flex-col items-center justify-center rounded-2xl border border-gray-100">
-                  <span className="text-[10px] font-bold text-gray-800 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-100 uppercase flex items-center gap-1">
-                    👑 Upgrade to unlock Professional Bills
-                  </span>
-                </div>
-            )}
-            <button
-              disabled={billItems.length === 0 || isSavingBill || isGeneratingBill || !isProUser}
-              onClick={async () => {
-                if (!billTemplateRef.current) return;
+            {/* WhatsApp Button */}
+            {(!isProUser && (shop?.whatsappCount || 0) >= 10 && (shop?.lastWhatsappDate === new Date().toDateString())) ? (
+              <button
+                onClick={() => setShowPricing(true)}
+                className="w-full bg-white text-orange-600 border-2 border-orange-600 py-4 rounded-2xl font-black text-xs shadow-sm flex items-center justify-center gap-2"
+              >
+                👑 Upgrade to unlock more messages
+              </button>
+            ) : (
+              <button
+                disabled={billItems.length === 0 || isSavingBill || isGeneratingBill}
+                onClick={async () => {
+                  const canSend = await checkWhatsAppLimit();
+                  if (!canSend) {
+                     setShowPricing(true);
+                     return;
+                  }
 
-                // Check for phone number if WhatsApp is clicked
-                if (!selectedCustomer) {
-                  setShowWhatsAppPhonePrompt(true);
-                  return;
-                }
-
-                setIsGeneratingBill(true);
-                
-                await handleCreateBill(selectedCustomer, billItems, billStatus, billLang);
-
-                try {
-                  const html2canvas = (await import('html2canvas')).default;
-                  const canvas = await html2canvas(billTemplateRef.current, { scale: 2, backgroundColor: '#ffffff' });
-                  const dataUrl = canvas.toDataURL('image/png');
+                  setIsGeneratingBill(true);
                   
-                  const a = document.createElement('a');
-                  a.style.display = 'none';
-                  a.href = dataUrl;
-                  a.download = `Bill_${selectedCustomerData?.name || 'Customer'}.png`;
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
+                  // Save bill first
+                  await handleCreateBill(selectedCustomer, billItems, billStatus, billLang);
 
-                  setLocalToast("Bill downloaded. Please attach the image in WhatsApp and send.");
-                  
-                  const phone = selectedCustomerData?.phone || '';
+                  // Open WhatsApp ONLY
+                  const phone = selectedCustomerData?.phone || tempWhatsAppPhone || '';
                   const cleanPhone = phone.replace(/\D/g, "");
                   if (cleanPhone) {
                     const finalPhone = cleanPhone.startsWith("91") ? cleanPhone : "91" + cleanPhone;
                     const msg = encodeURIComponent("Your bill is ready.");
-                    setTimeout(() => {
-                      window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
-                    }, 500);
+                    window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
+                  } else {
+                    setShowWhatsAppPhonePrompt(true);
                   }
-                } catch (err) {
-                  console.error("Error generating bill: ", err);
-                } finally {
-                  setShowBillPreview(false);
+                  
+                  setIsGeneratingBill(false);
                   setBillItems([]);
                   setSelectedCustomer("");
-                  setManualItem({ name: "", price: "", quantity: "1" });
-                  setIsGeneratingBill(false);
-                }
-              }}
-              className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-base shadow-lg hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {isGeneratingBill || isSavingBill ? (
-                <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
-              ) : (
-                "📲 Send on WhatsApp"
-              )}
-            </button>
-            <button
-              disabled={billItems.length === 0 || isSavingBill || isGeneratingBill || !isProUser}
-              onClick={() => setShowBillPreview(true)}
-              className="w-full bg-white text-green-600 border-2 border-green-600 py-3 rounded-2xl font-bold text-sm shadow-sm hover:bg-green-50 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              👁 View Professional Bill
-            </button>
+                }}
+                className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-base shadow-lg hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isGeneratingBill || isSavingBill ? (
+                  <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
+                ) : (
+                  "📲 Send on WhatsApp"
+                )}
+              </button>
+            )}
+
+            {/* View Professional Bill Button */}
+            {(!isProUser && (shop?.billViewCount || 0) >= 10 && (shop?.lastBillViewDate === new Date().toDateString())) ? (
+              <button
+                onClick={() => setShowPricing(true)}
+                className="w-full bg-white text-green-600 border-2 border-green-600 py-3 rounded-2xl font-black text-xs shadow-sm flex items-center justify-center gap-2"
+              >
+                👑 Upgrade to unlock Professional Bills
+              </button>
+            ) : (
+              <button
+                disabled={billItems.length === 0 || isSavingBill || isGeneratingBill}
+                onClick={async () => {
+                   if (!isProUser) {
+                     const canView = await checkBillViewLimit();
+                     if (!canView) {
+                       setShowPricing(true);
+                       return;
+                     }
+                   }
+                   setShowBillPreview(true);
+                }}
+                className="w-full bg-white text-green-600 border-2 border-green-600 py-3 rounded-2xl font-bold text-sm shadow-sm hover:bg-green-50 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                👁 View Professional Bill
+              </button>
+            )}
+            
+            {!isProUser && (
+              <p className="text-[9px] text-center text-gray-400 font-bold tracking-tight">Free plan: 10 actions/day</p>
+            )}
           </div>
         </div>
       </div>
@@ -669,19 +677,6 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
               </div>
 
               <div className="flex justify-center mb-6 border border-gray-200 bg-gray-50 p-4 rounded-3xl max-h-[50vh] overflow-y-auto no-scrollbar relative">
-                {!isProUser && (shop?.billViewCount || 0) >= 10 && (shop?.lastBillViewDate === new Date().toDateString()) && (
-                  <div className="absolute inset-0 z-10 bg-white/50 backdrop-blur-[2px] flex items-center justify-center text-center p-6">
-                    <div className="bg-white p-6 rounded-3xl shadow-xl border border-gray-100">
-                      <p className="text-sm font-bold text-gray-800 mb-4 tracking-tight">👑 Daily Limit Reached (10/10)</p>
-                      <button 
-                        onClick={() => {/* Trigger Upgrade Modal - usually handled in App.tsx or similar */}}
-                        className="text-xs font-black text-green-600 uppercase border-b-2 border-green-600"
-                      >
-                        Upgrade to Pro
-                      </button>
-                    </div>
-                  </div>
-                )}
                 <div className="origin-top" style={{ transform: 'scale(0.75)' }}>
                   <BillTemplate 
                     shop={shop}

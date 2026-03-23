@@ -20,10 +20,11 @@ interface HomeProps {
   setShowAddUdhar: (v: boolean) => void;
   handleMarkPaid: (udhar: Udhar) => Promise<void>;
   isMarkingPaidId: string | null;
+  setShowPricing: (v: boolean) => void;
 }
 
-export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUdhar, handleMarkPaid, isMarkingPaidId }: HomeProps) => {
-  const { shop, lang, bills, customers, udharList, checkWhatsAppLimit } = useApp();
+export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUdhar, handleMarkPaid, isMarkingPaidId, setShowPricing }: HomeProps) => {
+  const { shop, lang, bills, customers, udharList, checkWhatsAppLimit, isProUser } = useApp();
   const t = translations[lang];
 
   const today = new Date();
@@ -101,20 +102,29 @@ export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUd
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button
-                    onClick={async () => {
-                      const canSend = await checkWhatsAppLimit();
-                      if (!canSend) {
-                        alert("Free plan limit reached (10/day). Upgrade to Pro!");
-                        return;
-                      }
-                      const message = `Hello ${customer?.name},\nYour ₹${udhar.amount} is pending. Please complete your payment.\n\n* ${shop?.shop_name}`;
-                      openWhatsApp(customer?.phone || "", message);
-                    }}
-                    className="p-2 bg-green-50 text-green-600 rounded-full"
-                  >
-                    <MessageCircle size={20} />
-                  </button>
+                  {(!isProUser && (shop?.whatsappCount || 0) >= 10 && (shop?.lastWhatsappDate === new Date().toDateString())) ? (
+                    <button
+                      onClick={() => setShowPricing(true)}
+                      className="px-3 py-1.5 bg-white text-orange-600 border border-orange-200 rounded-full text-[9px] font-black uppercase whitespace-nowrap shadow-sm"
+                    >
+                      👑 Upgrade to unlock more messages
+                    </button>
+                  ) : (
+                    <button
+                      onClick={async () => {
+                        const canSend = await checkWhatsAppLimit();
+                        if (!canSend) {
+                          setShowPricing(true);
+                          return;
+                        }
+                        const message = `Hello ${customer?.name},\nYour ₹${udhar.amount} is pending. Please complete your payment.\n\n* ${shop?.shop_name}`;
+                        openWhatsApp(customer?.phone || "", message);
+                      }}
+                      className="p-2 bg-green-50 text-green-600 rounded-full"
+                    >
+                      <MessageCircle size={20} />
+                    </button>
+                  )}
                   <button 
                     disabled={isMarkingPaidId === udhar.id}
                     onClick={() => handleMarkPaid(udhar)} 

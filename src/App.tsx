@@ -58,6 +58,7 @@ function AppContent() {
   const [isSavingBill, setIsSavingBill] = useState(false);
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [isMarkingPaidId, setIsMarkingPaidId] = useState<string | null>(null);
+  const [showPricing, setShowPricing] = useState(false);
 
   useEffect(() => {
     if (toast) {
@@ -542,6 +543,7 @@ function AppContent() {
                 setShowAddUdhar={setShowAddUdhar} 
                 handleMarkPaid={handleMarkPaid} 
                 isMarkingPaidId={isMarkingPaidId}
+                setShowPricing={setShowPricing}
               />
             )}
             {activeTab === "customers" && <Customers setShowAddCustomer={setShowAddCustomer} />}
@@ -551,6 +553,7 @@ function AppContent() {
                 setShowAddProduct={setShowAddProduct} 
                 handleCreateBill={handleCreateBill}
                 isSavingBill={isSavingBill}
+                setShowPricing={setShowPricing}
               />
             )}
             {activeTab === "udhar" && (
@@ -559,6 +562,7 @@ function AppContent() {
                 handleMarkPaid={handleMarkPaid} 
                 setToast={setToast} 
                 isMarkingPaidId={isMarkingPaidId}
+                setShowPricing={setShowPricing}
               />
             )}
             {activeTab === "insights" && <Insights />}
@@ -771,6 +775,12 @@ function AppContent() {
           </button>
         </form>
       </Modal>
+
+      <AnimatePresence>
+        {showPricing && (
+          <PricingModal onPlanSelected={() => setShowPricing(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

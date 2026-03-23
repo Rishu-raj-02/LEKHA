@@ -11,10 +11,11 @@ interface UdharProps {
   handleMarkPaid: (udhar: Udhar) => Promise<void>;
   setToast: (toast: { message: string; type: "success" | "error" }) => void;
   isMarkingPaidId: string | null;
+  setShowPricing: (v: boolean) => void;
 }
 
-export const UdharTab = React.memo(({ setShowAddUdhar, handleMarkPaid, setToast, isMarkingPaidId }: UdharProps) => {
-  const { customers, udharList, shop, lang } = useApp();
+export const UdharTab = React.memo(({ setShowAddUdhar, handleMarkPaid, setToast, isMarkingPaidId, setShowPricing }: UdharProps) => {
+  const { shop, lang, bills, customers, udharList, checkWhatsAppLimit, isProUser } = useApp();
   const t = translations[lang];
 
   const [expandedUdharCustomer, setExpandedUdharCustomer] = useState<string | null>(null);
@@ -146,18 +147,35 @@ export const UdharTab = React.memo(({ setShowAddUdhar, handleMarkPaid, setToast,
                   <Phone size={20} />
                   <span className="text-[10px] font-bold uppercase">{t.call}</span>
                 </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const message = `Hello ${group.customerName},\n\nYou have a total pending payment of Rs ${group.totalAmount} at ${shop?.shop_name}.\n\nPlease complete your payment at the earliest.\n\nThank you,\n${shop?.shop_name}`;
-                    openWhatsApp(group.phone || "", message);
-                    setToast({ message: t.reminderSent, type: "success" });
-                  }}
-                  className="flex flex-col items-center justify-center gap-1 p-2 bg-green-600 text-white rounded-2xl hover:bg-green-700 transition-colors"
-                >
-                  <MessageCircle size={20} />
-                  <span className="text-[10px] font-bold uppercase">WhatsApp</span>
-                </button>
+                {(!isProUser && (shop?.whatsappCount || 0) >= 10 && (shop?.lastWhatsappDate === new Date().toDateString())) ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowPricing(true);
+                    }}
+                    className="flex flex-col items-center justify-center gap-1 p-2 bg-white text-orange-600 border border-orange-200 rounded-2xl shadow-sm"
+                  >
+                    <span className="text-[8px] font-black uppercase text-center px-1">👑 Upgrade to unlock more messages</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const canSend = await checkWhatsAppLimit();
+                      if (!canSend) {
+                        setShowPricing(true);
+                        return;
+                      }
+                      const message = `Hello ${group.customerName},\n\nYou have a total pending payment of Rs ${group.totalAmount} at ${shop?.shop_name}.\n\nPlease complete your payment at the earliest.\n\nThank you,\n${shop?.shop_name}`;
+                      openWhatsApp(group.phone || "", message);
+                      setToast({ message: t.reminderSent, type: "success" });
+                    }}
+                    className="flex flex-col items-center justify-center gap-1 p-2 bg-green-600 text-white rounded-2xl hover:bg-green-700 transition-colors"
+                  >
+                    <MessageCircle size={20} />
+                    <span className="text-[10px] font-bold uppercase">WhatsApp</span>
+                  </button>
+                )}
               </div>
             </div>
           );
