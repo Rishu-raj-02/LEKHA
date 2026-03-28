@@ -1,18 +1,21 @@
 import React, { useState, useMemo } from 'react';
-import { Search, X, Package, Plus } from "lucide-react";
+import { Search, X, Package, Plus, Minus, Trash2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { HighlightedText } from "./ui/HighlightedText";
-import { translations } from "../translations";
 import { useDebounce } from '../hooks/useDebounce';
+import { cn } from '../utils/helpers';
+import { translations } from '../translations';
 
 interface ItemsProps {
   setShowAddProduct: (v: boolean) => void;
 }
 
 export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
-  const { products, lang, isProUser } = useApp();
+  const { products, lang, isProUser, updateProductStock, deleteProduct } = useApp();
   const t = translations[lang];
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [stockInput, setStockInput] = useState<string>("");
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
@@ -86,9 +89,12 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
                 <p className="font-bold text-gray-800 text-sm mb-1">
                   <HighlightedText text={p.name} highlight={debouncedSearch} />
                 </p>
-                {isProUser && typeof p.stockQuantity === 'number' && p.stockQuantity < (p.minStock || 0) && (
-                  <span className="text-[9px] font-bold bg-red-100 text-red-600 px-2 py-0.5 rounded-full whitespace-nowrap">
-                    Low Stock
+                {isProUser && typeof p.stockQuantity === 'number' && p.stockQuantity <= 10 && (
+                  <span className={cn(
+                    "text-[9px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap",
+                    p.stockQuantity <= 5 ? "bg-red-100 text-red-600" : "bg-yellow-100 text-yellow-600"
+                  )}>
+                    {t.lowStockAlert} ({p.stockQuantity})
                   </span>
                 )}
               </div>
@@ -108,13 +114,70 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
                 ) : <div/>}
 
                 {isProUser && (
-                  <div className="text-right">
+                  <div className="flex flex-col items-end gap-2">
                     {typeof p.costPrice === 'number' && p.costPrice > 0 && (
                       <p className="text-[9px] text-gray-400 font-bold uppercase">CP: ₹{p.costPrice}</p>
                     )}
-                    {typeof p.stockQuantity === 'number' && (
-                      <p className="text-[10px] text-gray-600 font-bold">{p.stockQuantity} in stock</p>
-                    )}
+                    
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-center bg-gray-50 rounded-xl overflow-hidden border border-gray-100">
+                        <button 
+                          onClick={() => updateProductStock(p.id, Math.max(0, (p.stockQuantity || 0) - 1))}
+                          className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-red-500 active:scale-90 transition-transform"
+                        >
+                          <Minus size={12} strokeWidth={3} />
+                        </button>
+                        
+                        {editingId === p.id ? (
+                          <input 
+                            autoFocus
+                            type="number"
+                            value={stockInput}
+                            onChange={(e) => setStockInput(e.target.value)}
+                            onBlur={() => {
+                              updateProductStock(p.id, Number(stockInput) || 0);
+                              setEditingId(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                updateProductStock(p.id, Number(stockInput) || 0);
+                                setEditingId(null);
+                              }
+                            }}
+                            className="w-10 h-7 text-center bg-white text-[10px] font-black outline-none border-x border-gray-100"
+                          />
+                        ) : (
+                          <div 
+                            onClick={() => {
+                              setEditingId(p.id);
+                              setStockInput(String(p.stockQuantity || 0));
+                            }}
+                            className="px-2 min-w-[28px] h-7 flex items-center justify-center text-center font-black text-gray-800 text-[10px] cursor-text hover:bg-white transition-colors"
+                          >
+                            {p.stockQuantity || 0}
+                          </div>
+                        )}
+
+                        <button 
+                          onClick={() => updateProductStock(p.id, (p.stockQuantity || 0) + 1)}
+                          className="w-7 h-7 flex items-center justify-center text-gray-400 hover:text-green-600 active:scale-90 transition-transform"
+                        >
+                          <Plus size={12} strokeWidth={3} />
+                        </button>
+                      </div>
+
+                      <button 
+                        onClick={() => {
+                          if (window.confirm(t.deleteConfirm || "Are you sure?")) {
+                            deleteProduct(p.id);
+                          }
+                        }}
+                        className="w-7 h-7 rounded-lg bg-red-50 text-red-500 flex items-center justify-center active:scale-90 transition-transform hover:bg-red-100"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                    <p className="text-[8px] text-gray-400 font-bold uppercase">Stock Level</p>
                   </div>
                 )}
               </div>

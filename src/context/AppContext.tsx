@@ -10,13 +10,16 @@ import {
   getDoc,
   getDocs,
   setDoc,
+  addDoc,
   updateDoc,
+  deleteDoc,
   onSnapshot,
   query,
   where,
   orderBy,
   limit,
   Timestamp,
+  handleFirestoreError,
   loginWithGoogle,
   logout
 } from '../firebase';
@@ -40,8 +43,7 @@ interface AppContextType {
   logout: () => Promise<void>;
   isProUser: boolean;
   isPlanExpired: boolean;
-  checkWhatsAppLimit: () => Promise<boolean>;
-  checkBillViewLimit: () => Promise<boolean>;
+  checkFinalizeLimit: () => Promise<boolean>;
   showReportPopup: MonthlyReport | null;
   dismissReportPopup: () => void;
 }
@@ -103,6 +105,28 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     return unsubscribe;
   }, []);
 
+  const isProUser = React.useMemo(() => {
+    if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return true;
+    if (!shop) return false;
+    
+    if (shop.isPro && shop.planExpiry) {
+      const expiryMs = ensureDate(shop.planExpiry).getTime();
+      if (Date.now() <= expiryMs) return true;
+    }
+    return false;
+  }, [user, shop]);
+
+  const isPlanExpired = React.useMemo(() => {
+    if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return false;
+    if (!shop) return false;
+    
+    if (shop.isPro && shop.planExpiry) {
+      const expiryMs = ensureDate(shop.planExpiry).getTime();
+      if (Date.now() > expiryMs) return true;
+    }
+    return false;
+  }, [user, shop]);
+
   useEffect(() => {
     if (!user || !shop) return;
 
@@ -112,28 +136,36 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Customer));
       setCustomers(data);
       localStorage.setItem('lekha_customers', JSON.stringify(data));
+    }, (error) => {
+      console.warn("Customers listener error:", error.message);
     });
 
     const unsubProducts = onSnapshot(collection(shopRef, "products"), (snapshot) => {
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
       setProducts(data);
       localStorage.setItem('lekha_products', JSON.stringify(data));
+    }, (error) => {
+      console.warn("Products listener error:", error.message);
     });
 
     const unsubBills = onSnapshot(query(
       collection(shopRef, "bills"), 
       orderBy("created_at", "desc"), 
-      limit(200) // Increased from 50 to 200 for better 7-day analytics
+      limit(200) 
     ), (snapshot) => {
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Bill));
       setBills(data);
       localStorage.setItem('lekha_bills', JSON.stringify(data));
+    }, (error) => {
+      console.warn("Bills listener error:", error.message);
     });
 
     const unsubUdhar = onSnapshot(query(collection(shopRef, "udhar"), where("status", "==", "pending")), (snapshot) => {
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Udhar));
       setUdharList(data);
       localStorage.setItem('lekha_udhar', JSON.stringify(data));
+    }, (error) => {
+      console.warn("Udhar listener error:", error.message);
     });
 
     const unsubReports = onSnapshot(
@@ -141,6 +173,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       (snapshot) => {
         const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as MonthlyReport));
         setMonthlyReports(data);
+      }, (error) => {
+        console.warn("Reports listener error (expected if not Pro):", error.message);
       }
     );
 
@@ -155,62 +189,69 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
   // --- Month-End Archival Engine ---
   useEffect(() => {
-    if (!user || !shop || archivalDone) return;
+    if (archivalDone || !user || !shop || !isProUser) return;
+    
+    // Skip archival for demo accounts to avoid permission issues
+    if (user.email === "yourdemo@gmail.com" || user.email === "lekhawebapp@gmail.com") return;
+    
     setArchivalDone(true);
 
     const runArchival = async () => {
       try {
         const now = new Date();
         const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        const prevMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
         const reportId = `${prevMonth.getFullYear()}-${(prevMonth.getMonth() + 1).toString().padStart(2, '0')}`;
         const reportName = prevMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
+        
         const reportRef = doc(db, "shops", user.uid, "monthlyReports", reportId);
         const reportSnap = await getDoc(reportRef);
-        if (reportSnap.exists()) return; // Already generated
+        if (reportSnap.exists()) return; 
 
-        // Fetch ALL bills (not just cached) for previous month
-        const billsQuery = query(
-          collection(doc(db, "shops", user.uid), "bills"),
-          orderBy("created_at", "desc")
+        const q = query(
+          collection(db, "shops", user.uid, "bills"),
+          where("created_at", ">=", Timestamp.fromDate(new Date(prevMonth.getFullYear(), prevMonth.getMonth(), 1))),
+          where("created_at", "<", Timestamp.fromDate(new Date(prevMonth.getFullYear(), prevMonth.getMonth() + 1, 1)))
         );
-        const billsSnap = await getDocs(billsQuery);
-        const allBills = billsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Bill));
+        const billsSnap = await getDocs(q);
+        const prevMonthBills = billsSnap.docs.map(d => ({ id: d.id, ...d.data() } as Bill));
 
-        const prevMonthBills = allBills.filter(b => {
-          const d = ensureDate(b.created_at);
-          return d >= prevMonth && d <= prevMonthEnd && !b.isArchived;
-        });
+        if (prevMonthBills.length === 0) return; 
 
-        if (prevMonthBills.length === 0) return; // Nothing to archive
+        // CALCULATE total sales and profit correctly from types
+        const totalSales = prevMonthBills.reduce((acc, b) => acc + (b.totalAmount || 0), 0);
+        const totalProfit = prevMonthBills.reduce((acc, b) => {
+          const items = b.items || [];
+          const billProfit = items.reduce((p, item) => {
+            const itemPrice = item.price || 0;
+            const itemCost = item.cost_price || 0;
+            return p + ((itemPrice - itemCost) * (item.quantity || 1));
+          }, 0);
+          return acc + billProfit;
+        }, 0);
 
-        const totalSales = prevMonthBills.reduce((a, b) => a + b.total_amount, 0);
-        const totalProfit = prevMonthBills.reduce((a, b) => a + (b.total_profit || 0), 0);
-
-        // Item-level stats
-        const itemStats: Record<string, { name: string; profit: number }> = {};
-        prevMonthBills.forEach(bill => {
-          bill.items?.forEach((item: any) => {
-            const n = item.name || item.product_name || 'Unknown';
-            if (!itemStats[n]) itemStats[n] = { name: n, profit: 0 };
-            itemStats[n].profit += (item.price || 0) * (item.quantity || 1);
+        const itemStats: Record<string, { name: string, profit: number }> = {};
+        prevMonthBills.forEach(b => {
+          (b.items || []).forEach(item => {
+            const name = item.product_name || 'Unknown';
+            const profitVal = (item.price - (item.cost_price || 0)) * (item.quantity || 1);
+            if (!itemStats[name]) itemStats[name] = { name: name, profit: 0 };
+            itemStats[name].profit += profitVal;
           });
         });
+
         const sortedItems = Object.values(itemStats).sort((a, b) => b.profit - a.profit);
         const bestItem = sortedItems[0] || { name: '-', profit: 0 };
         const worstItem = sortedItems[sortedItems.length - 1] || { name: '-', profit: 0 };
 
-        // Profit trend by date
         const trendMap: Record<string, number> = {};
         prevMonthBills.forEach(b => {
           const d = ensureDate(b.created_at);
           const key = d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
-          trendMap[key] = (trendMap[key] || 0) + (b.total_profit || 0);
+          const billProfit = (b.items || []).reduce((p, item) => p + ((item.price - (item.cost_price || 0)) * (item.quantity || 1)), 0);
+          trendMap[key] = (trendMap[key] || 0) + billProfit;
         });
         const profitTrend = Object.entries(trendMap).map(([dateStr, profit]) => ({ dateStr, profit }));
 
-        // Check previous-previous month for comparison
         const ppMonthId = `${new Date(prevMonth.getFullYear(), prevMonth.getMonth() - 1, 1).getFullYear()}-${(new Date(prevMonth.getFullYear(), prevMonth.getMonth() - 1, 1).getMonth() + 1).toString().padStart(2, '0')}`;
         const ppReportSnap = await getDoc(doc(db, "shops", user.uid, "monthlyReports", ppMonthId));
         let comparisonWithLastMonth = 0;
@@ -236,7 +277,6 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
         await setDoc(reportRef, reportData);
 
-        // Archive old bills in batch
         const batch = writeBatch(db);
         prevMonthBills.forEach(b => {
           batch.update(doc(db, "shops", user.uid, "bills", b.id), { isArchived: true });
@@ -245,12 +285,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
         setShowReportPopup({ id: reportId, ...reportData } as MonthlyReport);
       } catch (err) {
-        console.error('Monthly archival error:', err);
+        if (err instanceof Error && err.message.includes('permission-denied')) {
+           console.warn("Insufficient permissions for automated monthly archival.");
+        } else {
+           console.error('Monthly archival error:', err);
+        }
       }
     };
 
     runArchival();
-  }, [user, shop, archivalDone]);
+  }, [user, shop, archivalDone, isProUser]);
 
   const login = React.useCallback(async () => {
     try {
@@ -272,73 +316,46 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, []);
 
-  const isProUser = React.useMemo(() => {
-    if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return true;
-    if (!shop) return false;
-    
-    if (shop.isPro && shop.planExpiry) {
-      const expiryMs = ensureDate(shop.planExpiry).getTime();
-      if (Date.now() <= expiryMs) return true;
-    }
-    return false;
-  }, [user, shop]);
-
-  const isPlanExpired = React.useMemo(() => {
-    if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return false;
-    if (!shop) return false;
-    
-    if (shop.isPro && shop.planExpiry) {
-      const expiryMs = ensureDate(shop.planExpiry).getTime();
-      if (Date.now() > expiryMs) return true;
-    }
-    return false;
-  }, [user, shop]);
-
-  const checkWhatsAppLimit = React.useCallback(async () => {
+  const checkFinalizeLimit = React.useCallback(async () => {
     if (isProUser) return true;
     if (!user || !shop) return false;
     
     const todayStr = new Date().toDateString();
-    let currentCount = shop.whatsappCount || 0;
-    if (shop.lastWhatsappDate !== todayStr) currentCount = 0;
+    let currentCount = shop.dailyFinalizeCount || 0;
+    if (shop.lastFinalizeDate !== todayStr) currentCount = 0;
     
-    if (currentCount >= 10) return false;
+    if (currentCount >= 15) return false;
     
     try {
       await updateDoc(doc(db, "shops", user.uid), {
-        whatsappCount: currentCount + 1,
-        lastWhatsappDate: todayStr
+        dailyFinalizeCount: currentCount + 1,
+        lastFinalizeDate: todayStr
       });
-      setShop({ ...shop, whatsappCount: currentCount + 1, lastWhatsappDate: todayStr });
+      setShop({ ...shop, dailyFinalizeCount: currentCount + 1, lastFinalizeDate: todayStr });
       return true;
     } catch (err) {
-      console.error("WhatsApp Limit Update Error:", err);
+      console.error("Finalize Limit Update Error:", err);
       return false;
     }
   }, [isProUser, shop, user, setShop]);
 
-  const checkBillViewLimit = React.useCallback(async () => {
-    if (isProUser) return true;
-    if (!user || !shop) return false;
-    
-    const todayStr = new Date().toDateString();
-    let currentCount = shop.billViewCount || 0;
-    if (shop.lastBillViewDate !== todayStr) currentCount = 0;
-    
-    if (currentCount >= 10) return false;
-    
+  const updateProductStock = React.useCallback(async (productId: string, newStock: number) => {
+    if (!user) return;
     try {
-      await updateDoc(doc(db, "shops", user.uid), {
-        billViewCount: currentCount + 1,
-        lastBillViewDate: todayStr
-      });
-      setShop({ ...shop, billViewCount: currentCount + 1, lastBillViewDate: todayStr });
-      return true;
+      await updateDoc(doc(db, "shops", user.uid, "products", productId), { stockQuantity: Math.max(0, Math.floor(newStock)) });
     } catch (err) {
-      console.error("Bill View Limit Update Error:", err);
-      return false;
+      console.error("Update Product Stock Error:", err);
     }
-  }, [isProUser, shop, user, setShop]);
+  }, [user]);
+
+  const deleteProduct = React.useCallback(async (productId: string) => {
+    if (!user) return;
+    try {
+      await deleteDoc(doc(db, "shops", user.uid, "products", productId));
+    } catch (err) {
+      console.error("Delete Product Error:", err);
+    }
+  }, [user]);
 
   const contextValue = React.useMemo(() => ({
     user,
@@ -357,11 +374,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     logout: handleLogout,
     isProUser,
     isPlanExpired,
-    checkWhatsAppLimit,
-    checkBillViewLimit,
+    checkFinalizeLimit,
+    updateProductStock,
+    deleteProduct,
     showReportPopup,
     dismissReportPopup
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkWhatsAppLimit, checkBillViewLimit, showReportPopup, dismissReportPopup]);
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup]);
 
   return (
     <AppContext.Provider value={contextValue}>

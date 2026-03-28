@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { User as UserIcon, Receipt, AlertCircle, CheckCircle2, Languages } from "lucide-react";
+import { User as UserIcon, Receipt, AlertCircle, CheckCircle2, Languages, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, openWhatsApp } from "./utils/helpers";
 import {
@@ -26,6 +26,7 @@ import { Footer } from "./components/ui/Footer";
 import { PrivacyPolicy, TermsAndConditions, RefundPolicy, ContactUs } from "./components/LegalPages";
 
 import { PricingModal } from "./components/ui/PricingModal";
+import { WelcomeScreen } from "./components/WelcomeScreen";
 
 const Home = React.lazy(() => import("./components/Home").then(m => ({ default: m.Home })));
 const Customers = React.lazy(() => import("./components/Customers").then(m => ({ default: m.Customers })));
@@ -36,8 +37,24 @@ const Profile = React.lazy(() => import("./components/Profile").then(m => ({ def
 const Insights = React.lazy(() => import("./components/Insights").then(m => ({ default: m.Insights })));
 const Reports = React.lazy(() => import("./components/Reports").then(m => ({ default: m.Reports })));
 
+const PremiumLock = ({ title, onUpgrade }: { title: string, onUpgrade: () => void }) => (
+  <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center animate-in fade-in zoom-in duration-500">
+    <div className="w-20 h-20 bg-gray-100 rounded-[2rem] flex items-center justify-center mb-6 text-gray-400 border border-gray-100 shadow-inner">
+      <Lock size={40} />
+    </div>
+    <h2 className="text-2xl font-black text-gray-800 mb-2">🔒 {title}</h2>
+    <p className="text-gray-500 font-medium mb-8 text-sm">This feature is available in Premium</p>
+    <button 
+      onClick={onUpgrade}
+      className="bg-green-600 text-white px-10 py-4 rounded-2xl font-black text-lg shadow-[0_10px_20px_rgba(22,163,74,0.2)] active:scale-95 transition-all"
+    >
+      Upgrade for ₹49
+    </button>
+  </div>
+);
+
 function AppContent() {
-  const { user, shop, loading, lang, setLang, customers, products, setShop, error, login, isProUser, isPlanExpired, checkWhatsAppLimit, showReportPopup, dismissReportPopup } = useApp();
+  const { user, shop, loading, lang, setLang, customers, products, setShop, error, login, isProUser, isPlanExpired, showReportPopup, dismissReportPopup } = useApp();
   const t = translations[lang];
 
   const [activeTab, setActiveTab] = useState("home");
@@ -59,6 +76,7 @@ function AppContent() {
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [isMarkingPaidId, setIsMarkingPaidId] = useState<string | null>(null);
   const [showPricing, setShowPricing] = useState(false);
+  const [duplicateProduct, setDuplicateProduct] = useState<{ existing: any; newData: any } | null>(null);
 
   useEffect(() => {
     if (toast) {
@@ -181,6 +199,13 @@ function AppContent() {
       lastUsedPrice: Number(formData.get("price")),
     };
 
+    // DUPLICATE DETECTION
+    const existing = products.find(p => p.name.toLowerCase() === productData.name.toLowerCase());
+    if (existing) {
+      setDuplicateProduct({ existing, newData: productData });
+      return;
+    }
+
     setIsAddingProduct(true);
     try {
       await addDoc(collection(db, "shops", user.uid, "products"), productData);
@@ -259,7 +284,7 @@ function AppContent() {
     }
 
     setIsSavingBill(true);
-    const total = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
+    const totalAmount = items.reduce((acc, item) => acc + item.price * item.quantity, 0);
     
     // Inventory & Profit Calculations
     let total_cost = 0;
@@ -267,30 +292,33 @@ function AppContent() {
       const p = products.find(prod => prod.name === i.name);
       const cp = p?.costPrice || 0;
       total_cost += cp * i.quantity;
-      return { product_name: i.name, price: i.price, quantity: i.quantity, cost_price: cp };
+      return { id: p?.id || `item-${Date.now()}-${Math.random()}`, product_name: i.name, price: i.price, quantity: i.quantity, cost_price: cp };
     });
-    const total_profit = total - total_cost;
 
-    const customerName = customerId ? (customers.find(c => c.id === customerId)?.name || "Customer") : "Walk-in Customer";
+    const selectedCustomer = customers.find(c => c.id === customerId);
+    const customerData = {
+      name: selectedCustomer?.name || "Walk-in Customer",
+      phone: selectedCustomer?.phone || null
+    };
 
     const billData = {
-      customer_id: customerId || "walk-in",
-      customer_name: customerName,
-      total_amount: total,
-      total_cost,
-      total_profit,
-      status: billStatus,
       items: itemsData,
+      customer: customerData,
+      totalAmount,
+      total_cost,
+      total_profit: totalAmount - total_cost,
+      status: billStatus,
       created_at: Timestamp.now(),
     };
 
     try {
       await addDoc(collection(db, "shops", user.uid, "bills"), billData);
       
+      // Handle Udhar if pending
       if (billStatus === "pending" && customerId) {
         await addDoc(collection(db, "shops", user.uid, "udhar"), {
           customer_id: customerId,
-          amount: total,
+          amount: totalAmount,
           status: "pending",
           due_date: null,
           created_at: Timestamp.now(),
@@ -299,57 +327,33 @@ function AppContent() {
         const customerDoc = await getDoc(customerRef);
         if (customerDoc.exists()) {
           const currentUdhar = customerDoc.data().total_udhar || 0;
-          await updateDoc(customerRef, { total_udhar: currentUdhar + total });
+          await updateDoc(customerRef, { total_udhar: currentUdhar + totalAmount });
         }
       }
       
       // Update inventory stock and last prices
-      if (isProUser) {
-        for (const i of items) {
-          const p = products.find(prod => prod.name === i.name);
-          if (p && p.id) {
-            const productRef = doc(db, "shops", user.uid, "products", p.id);
-            const updates: any = {};
-            if (p.stockQuantity !== undefined) {
-              updates.stockQuantity = Math.max(0, p.stockQuantity - i.quantity);
-            }
-            if (p.sellingType === "variable") {
-              updates.lastUsedPrice = i.price;
-            }
-            if (Object.keys(updates).length > 0) {
-              await updateDoc(productRef, updates).catch(console.error);
-            }
+      for (const i of items) {
+        const p = products.find(prod => prod.name === i.name);
+        if (p && p.id) {
+          const productRef = doc(db, "shops", user.uid, "products", p.id);
+          const updates: any = {};
+          if (p.stockQuantity !== undefined) {
+            // STOCK UPDATE RULES: Billing/Save reduces stock
+            updates.stockQuantity = Math.max(0, p.stockQuantity - i.quantity);
+          }
+          if (p.sellingType === "variable") {
+            updates.lastUsedPrice = i.price;
+          }
+          if (Object.keys(updates).length > 0) {
+            await updateDoc(productRef, updates).catch(console.error);
           }
         }
       }
       
-      const customer = customers.find(c => c.id === customerId);
-      if (customer) {
-        const itemsList = items.map(i => `${i.name} x ${i.quantity} = Rs ${i.price * i.quantity}`).join("\n");
-        let message = "";
-        
-        if (billLang === "en") {
-          const statusText = billStatus === "paid" ? "Paid" : "Pending";
-          const footerText = billStatus === "paid" ? "Payment received successfully. Thank you." : "Please complete your payment at the earliest.";
-          message = `Hello ${customer.name},\n\n*INVOICE / BILL*\n\nThank you for your purchase from *${shop.shop_name}*.\n\n*Items:*\n\n${itemsList}\n--------------------------------\n\n*Total Amount: Rs ${total}*\n*Payment Status: ${statusText}*\n\n${footerText}\n\nThank you for your business.\n\n*${shop.shop_name}*`;
-        } else {
-          const statusText = billStatus === "paid" ? "भुगतान हुआ" : "लंबित";
-          const footerText = billStatus === "paid" 
-            ? "आपका भुगतान प्राप्त हो गया है। धन्यवाद।" 
-            : "कृपया अपना भुगतान जल्द से जल्द पूरा करें।";
-          
-          message = `नमस्ते ${customer.name},\n\n*बिल विवरण*\n\n*${shop.shop_name}* से खरीदारी करने के लिए धन्यवाद।\n\n*सामान:*\n\n${itemsList}\n--------------------------------\n\n*कुल राशि: Rs ${total}*\n*भुगतान स्थिति: ${statusText}*\n\n${footerText}\n\n--------------------------------\n\nधन्यवाद।\n\n*${shop.shop_name}*`;
-        }
-
-        const canSend = await checkWhatsAppLimit();
-        if (canSend) {
-          openWhatsApp(customer.phone, message);
-        } else {
-          setToast({ message: "Free plan limit reached (10/day). Upgrade to Pro!", type: "error" });
-        }
-      }
+      setToast({ message: "Bill Saved Successfully ✅", type: "success" });
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `shops/${user.uid}/bills`);
+      setToast({ message: "Failed to save bill", type: "error" });
     } finally {
       setIsSavingBill(false);
     }
@@ -395,7 +399,7 @@ function AppContent() {
         </button>
         <motion.div initial={{ scale: 0.8, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center">
           <div className="w-20 h-20 bg-white rounded-2xl flex items-center justify-center text-green-600 mx-auto mb-6 shadow-xl">
-            <Receipt size={48} />
+            <span className="text-5xl font-black">₹</span>
           </div>
           <h1 className="text-4xl font-black mb-2 tracking-tight">Lekha</h1>
           <p className="text-green-100 mb-10 text-lg">Simple shop management for everyone.</p>
@@ -459,6 +463,25 @@ function AppContent() {
     return <PricingModal onPlanSelected={() => setActiveTab("home")} />;
   }
 
+  if (shop && shop.planType && !shop.hasSeenWelcome) {
+    return (
+      <WelcomeScreen 
+        userName={shop.owner_name} 
+        onComplete={async () => {
+          if (!user || !shop) return;
+          try {
+            await updateDoc(doc(db, "shops", user.uid), { hasSeenWelcome: true });
+            setShop({ ...shop, hasSeenWelcome: true });
+          } catch (err) {
+            console.error("Error updating welcome status:", err);
+            // Fallback: update local state anyway so user isn't stuck
+            setShop({ ...shop, hasSeenWelcome: true });
+          }
+        }} 
+      />
+    );
+  }
+
   if (shop && isPlanExpired && shop.planType === "pro") {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6 relative">
@@ -476,31 +499,16 @@ function AppContent() {
           <h2 className="text-2xl font-black text-gray-800 mb-3">Plan Expired</h2>
           <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">Your 1-month plan has expired.<br/>Renew to continue Pro features.</p>
           <div className="space-y-4">
-             <button 
+              <button 
                 onClick={() => {
-                  const options = {
-                    key: import.meta.env.VITE_RAZORPAY_KEY_ID,
-                    amount: 4900,
-                    currency: "INR",
-                    name: t.appName,
-                    description: "Pro Subscription Renewal",
-                    handler: async function (response: any) {
-                      const planStart = Timestamp.now();
-                      const expiryDate = new Date();
-                      expiryDate.setDate(expiryDate.getDate() + 30);
-                      const planExpiry = Timestamp.fromDate(expiryDate);
-                      await updateDoc(doc(db, "shops", user!.uid), { isPro: true, planType: "pro", planStart, planExpiry });
-                      setShop({ ...shop, isPro: true, planType: "pro", planStart, planExpiry });
-                    },
-                    prefill: { name: shop.owner_name, email: user!.email, contact: shop.phone },
-                    theme: { color: "#16a34a" }
-                  };
-                  new (window as any).Razorpay(options).open();
+                  // Redirect to Pricing Page inside the app flow
+                  setActiveTab("home"); // Ensure we are at home or somewhere where pricing can be shown
+                  setShowPricing(true);
                 }}
                 className="w-full bg-green-600 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-green-700 active:scale-[0.98] transition-all"
-             >
-               Renew Now
-             </button>
+              >
+                Renew Now
+              </button>
              <button 
                 onClick={async () => {
                   await updateDoc(doc(db, "shops", user!.uid), { planType: "free", isPro: false });
@@ -565,8 +573,20 @@ function AppContent() {
                 setShowPricing={setShowPricing}
               />
             )}
-            {activeTab === "insights" && <Insights />}
-            {activeTab === "reports" && <Reports />}
+            {activeTab === "insights" && (
+              !isProUser ? (
+                <PremiumLock title="Insights" onUpgrade={() => setShowPricing(true)} />
+              ) : (
+                <Insights />
+              )
+            )}
+            {activeTab === "reports" && (
+              !isProUser ? (
+                <PremiumLock title="Monthly Reports" onUpgrade={() => setShowPricing(true)} />
+              ) : (
+                <Reports />
+              )
+            )}
             {activeTab === "items" && <Items setShowAddProduct={setShowAddProduct} />}
             {activeTab === "profile" && <Profile setShowEditProfile={setShowEditProfile} />}
           </motion.div>
@@ -779,6 +799,61 @@ function AppContent() {
       <AnimatePresence>
         {showPricing && (
           <PricingModal onPlanSelected={() => setShowPricing(false)} />
+        )}
+      </AnimatePresence>
+
+      {/* Duplicate Product Modal */}
+      <AnimatePresence>
+        {duplicateProduct && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white p-6 rounded-[2rem] shadow-xl w-full max-w-sm text-center">
+              <div className="w-16 h-16 bg-yellow-50 text-yellow-600 rounded-2xl mx-auto flex items-center justify-center mb-4 text-2xl font-black">
+                ⚠️
+              </div>
+              <h3 className="font-bold text-gray-800 text-lg mb-1">{t.itemExists}</h3>
+              <p className="text-sm text-gray-500 mb-4">
+                <strong>{duplicateProduct.existing.name}</strong><br/>
+                Current Stock: {duplicateProduct.existing.stockQuantity || 0}<br/>
+                Price: ₹{duplicateProduct.existing.price}
+              </p>
+              
+              <div className="space-y-3">
+                <button 
+                  onClick={async () => {
+                    const existing = duplicateProduct.existing;
+                    const newData = duplicateProduct.newData;
+                    const productRef = doc(db, "shops", user!.uid, "products", existing.id);
+                    await updateDoc(productRef, { 
+                      stockQuantity: (existing.stockQuantity || 0) + newData.stockQuantity 
+                    });
+                    setToast({ message: "Stock updated for " + existing.name, type: "success" });
+                    setDuplicateProduct(null);
+                    setShowAddProduct(false);
+                  }} 
+                  className="w-full py-4 bg-green-600 text-white font-bold rounded-2xl shadow-lg flex items-center justify-center gap-2"
+                >
+                  ➕ {t.addToExisting}
+                </button>
+                <button 
+                  onClick={async () => {
+                    setIsAddingProduct(true);
+                    const newData = duplicateProduct.newData;
+                    await addDoc(collection(db, "shops", user!.uid, "products"), { ...newData, name: newData.name + " (New)" });
+                    setToast({ message: t.addItem + " Success", type: "success" });
+                    setDuplicateProduct(null);
+                    setShowAddProduct(false);
+                    setIsAddingProduct(false);
+                  }}
+                  className="w-full py-4 bg-white text-gray-800 border-2 border-gray-200 font-bold rounded-2xl flex items-center justify-center gap-2"
+                >
+                   🆕 {t.addNew}
+                </button>
+                <button onClick={() => setDuplicateProduct(null)} className="w-full py-3 text-gray-400 font-bold text-sm">
+                  {t.cancel}
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

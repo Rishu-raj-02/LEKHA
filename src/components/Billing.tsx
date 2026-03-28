@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { Search, Plus, Minus, Trash2, MessageCircle, X, CheckCircle2, Receipt, ShoppingBag, User, CreditCard, Globe } from "lucide-react";
+import { Search, Plus, Minus, Trash2, MessageCircle, X, CheckCircle2, Receipt, ShoppingBag, User, CreditCard, Globe, ScanLine, Camera, Rocket, Lock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { cn, formatPhone } from "../utils/helpers";
@@ -22,7 +22,7 @@ interface BillingProps {
 }
 
 export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, handleCreateBill, isSavingBill, setShowPricing }: BillingProps) => {
-  const { customers, products, shop, lang, isProUser, checkBillViewLimit, checkWhatsAppLimit } = useApp();
+  const { customers, products, shop, lang, isProUser, checkFinalizeLimit } = useApp();
   const t = translations[lang];
 
   const [selectedCustomer, setSelectedCustomer] = useState("");
@@ -44,6 +44,14 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
   
   const [showWhatsAppPhonePrompt, setShowWhatsAppPhonePrompt] = useState(false);
   const [tempWhatsAppPhone, setTempWhatsAppPhone] = useState("");
+  const [autoDownloadEnabled, setAutoDownloadEnabled] = useState(false);
+  const [autoDownloadOptions, setAutoDownloadOptions] = useState({ onSave: true, onNoSave: true });
+  const [savePreference, setSavePreference] = useState<'ask' | 'always' | 'never'>('ask');
+  const [billingStep, setBillingStep] = useState<'editing' | 'deciding' | 'ready'>('editing');
+  const [isSavedInDB, setIsSavedInDB] = useState(false);
+  const [showDiamondMenu, setShowDiamondMenu] = useState(false);
+  const [editingQtyId, setEditingQtyId] = useState<string | null>(null);
+  const [qtyInput, setQtyInput] = useState<string>("");
 
   const billTemplateRef = React.useRef<HTMLDivElement>(null);
   const [isGeneratingBill, setIsGeneratingBill] = useState(false);
@@ -101,25 +109,41 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
     return item?.quantity || 0;
   }, [billItems]);
 
-  // Increment item
+  // Increment item with stock limit check
   const incrementItem = useCallback((product: any) => {
+    const stock = product.stockQuantity ?? 999999;
+    
     if (isProUser && product.sellingType === "variable") {
-      // Check if already in bill (price already set)
       const existing = billItems.find(i => i.id === product.id || i.id.startsWith(product.id + '-'));
       if (existing) {
-        // Already has a price set, just increment
+        if (existing.quantity >= stock) {
+          setLocalToast(`Stock limit reached (${stock})`);
+          return;
+        }
         setBillItems(prev => prev.map(i => i.id === existing.id ? { ...i, quantity: i.quantity + 1 } : i));
       } else {
-        // First time - ask for price
+        if (stock <= 0) {
+          setLocalToast("Out of Stock");
+          return;
+        }
         setAskPriceFor(product);
         setVariablePrice(product.lastUsedPrice ? product.lastUsedPrice.toString() : product.price.toString());
       }
       return;
     }
+
     const existing = billItems.find(i => i.id === product.id);
     if (existing) {
+      if (existing.quantity >= stock) {
+        setLocalToast(`Stock limit reached (${stock})`);
+        return;
+      }
       setBillItems(prev => prev.map(i => i.id === product.id ? { ...i, quantity: i.quantity + 1 } : i));
     } else {
+      if (stock <= 0) {
+        setLocalToast("Out of Stock");
+        return;
+      }
       setBillItems(prev => [...prev, { id: product.id, name: product.name, price: product.price, quantity: 1 }]);
     }
   }, [billItems, isProUser]);
@@ -135,12 +159,117 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
     }
   }, [billItems]);
 
-  const handleSaveBill = async () => {
-    await handleCreateBill(selectedCustomer, billItems, billStatus, billLang);
-    setShowBillPreview(false);
+  // Remove item completely
+  const removeItemFromBill = useCallback((itemBillId: string) => {
+    setBillItems(prev => prev.filter(i => i.id !== itemBillId));
+  }, []);
+
+  const initiateBilling = useCallback(async () => {
+    if (billItems.length === 0) {
+      setLocalToast(t.noItems);
+      return;
+    }
+
+    const canProceed = await checkFinalizeLimit();
+    if (!canProceed) {
+      setShowPricing(true);
+      return;
+    }
+
+    if (savePreference === 'always') {
+      handleDecision(true);
+    } else if (savePreference === 'never') {
+      handleDecision(false);
+    } else {
+      setBillingStep('deciding');
+    }
+  }, [billItems, savePreference, t, checkFinalizeLimit, setShowPricing]);
+
+  const handleDecision = async (shouldSave: boolean) => {
+    setBillingStep('ready');
+    setIsSavedInDB(shouldSave);
+    
+    if (shouldSave) {
+      // SAVE TO DB + UPDATE INVENTORY
+      // This logic must be atomic and strict
+      try {
+        await handleCreateBill(selectedCustomer, billItems, billStatus, billLang);
+        setLocalToast("Bill Saved & Inventory Updated ✅");
+        
+        // Final Auto Download Trigger
+        if (autoDownloadEnabled && autoDownloadOptions.onSave) {
+          executeDownload();
+        }
+      } catch (err) {
+        setLocalToast("Failed to save bill");
+      }
+    } else {
+      setLocalToast("Action Ready (Bill Not Saved)");
+      if (autoDownloadEnabled && autoDownloadOptions.onNoSave) {
+        executeDownload();
+      }
+    }
+  };
+
+  const executeDownload = async () => {
+    setIsGeneratingBill(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(billTemplateRef.current, { 
+        scale: 2, 
+        backgroundColor: '#ffffff',
+        logging: false,
+        useCORS: true 
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `Bill_${selectedCustomerData?.name || 'WalkIn'}_${Date.now()}.png`;
+      a.click();
+    } catch (err) {
+      setLocalToast("Download failed");
+    } finally {
+      setIsGeneratingBill(false);
+    }
+  };
+
+  const generateBillWhatsAppText = () => {
+    const customerName = selectedCustomerData?.name || "Walk-in Customer";
+    const shopName = shop?.shop_name || "LEKHA SHOP";
+    
+    let itemsList = "";
+    billItems.forEach(item => {
+      itemsList += `${item.name.padEnd(12)} ${item.quantity.toString().padEnd(6)} ₹${item.price * item.quantity}\n`;
+    });
+
+    return `🧾 *LEKHA BILL*\n\n*Shop:* ${shopName}\n\n*Customer:* ${customerName}\n\n------------------------\n*Item*        *Qty*    *₹*\n${itemsList}------------------------\n\n*Total: ₹${total}*\n*Status: ${billStatus.toUpperCase()}*\n\nThank you for your business 🙏`;
+  };
+
+  const executeWhatsApp = async () => {
+    const phone = selectedCustomerData?.phone || tempWhatsAppPhone || '';
+    if (!phone) {
+      setShowWhatsAppPhonePrompt(true);
+      return;
+    }
+
+    // Unlimited for everyone in the new rule (only Finalize is limited)
+    const cleanPhone = phone.replace(/\D/g, "");
+    const finalPhone = cleanPhone.startsWith("91") ? cleanPhone : "91" + cleanPhone;
+    
+    const billText = generateBillWhatsAppText();
+    const msg = encodeURIComponent(billText);
+    
+    setLocalToast("Opening WhatsApp...");
+    window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
+  };
+
+  const resetBilling = () => {
+    setBillingStep('editing');
+    setIsSavedInDB(false);
     setBillItems([]);
     setSelectedCustomer("");
     setManualItem({ name: "", price: "", quantity: "1" });
+    setTempWhatsAppPhone("");
   };
 
   if (!shop) return null;
@@ -154,12 +283,14 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
           <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1">
             <ShoppingBag size={13} className="text-green-500" /> {t.addItem || "Select Items"}
           </h3>
-          <button 
-            onClick={() => setShowAddProduct(true)}
-            className="text-[10px] font-bold text-green-600 flex items-center gap-0.5 bg-green-50 px-2.5 py-1 rounded-full"
-          >
-            <Plus size={12} /> Add New Item
-          </button>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => setShowAddProduct(true)}
+              className="text-[10px] font-bold text-green-600 flex items-center gap-0.5 bg-green-50 px-2.5 py-1 rounded-full ml-1"
+            >
+              <Plus size={12} /> Add New Item
+            </button>
+          </div>
         </div>
 
         {/* Item Rows */}
@@ -208,29 +339,103 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
                         )}
                       </>
                     )}
+                    {isProUser && p.stockQuantity !== undefined && (
+                      <span className={cn(
+                        "text-[9px] font-bold px-1.5 py-0.5 rounded-full",
+                        p.stockQuantity === 0 ? "bg-red-100 text-red-600" :
+                        (p.stockQuantity - qty) <= 0 ? "bg-red-100 text-red-600" :
+                        (p.stockQuantity - qty) <= 5 ? "bg-red-50 text-red-500 border border-red-100" : 
+                        (p.stockQuantity - qty) <= 10 ? "bg-yellow-50 text-yellow-600 border border-yellow-100" : "bg-gray-50 text-gray-400 border border-gray-100"
+                      )}>
+                        {p.stockQuantity === 0 ? "Out of Stock ❌" : 
+                         (p.stockQuantity - qty) <= 0 ? "No more stock 🚫" :
+                         (p.stockQuantity - qty) <= 10 ? `${t.lowStockAlert} (${p.stockQuantity - qty} left)` : `Available: ${p.stockQuantity - qty} left`}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center bg-gray-50 rounded-xl overflow-hidden border border-gray-100">
+                    {isSelected && (
+                      <button 
+                        onClick={() => decrementItem(billEntryId)} 
+                        className="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-red-500 active:scale-90 transition-transform"
+                      >
+                        <Minus size={14} strokeWidth={3} />
+                      </button>
+                    )}
+                    {isSelected && (
+                      editingQtyId === billEntryId ? (
+                        <input 
+                          autoFocus
+                          type="number"
+                          value={qtyInput}
+                          onChange={(e) => setQtyInput(e.target.value)}
+                          onBlur={() => {
+                            const stock = p.stockQuantity ?? 999999;
+                            let val = Number(qtyInput);
+                            if (val > stock) {
+                              val = stock;
+                              setLocalToast(`Only available stock can be added (${stock})`);
+                            }
+                            if (val <= 0) {
+                              removeItemFromBill(billEntryId);
+                            } else {
+                              setBillItems(prev => prev.map(i => i.id === billEntryId ? { ...i, quantity: val } : i));
+                            }
+                            setEditingQtyId(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const stock = p.stockQuantity ?? 999999;
+                              let val = Number(qtyInput);
+                              if (val > stock) {
+                                val = stock;
+                                setLocalToast(`Only available stock can be added (${stock})`);
+                              }
+                              if (val <= 0) {
+                                removeItemFromBill(billEntryId);
+                              } else {
+                                setBillItems(prev => prev.map(i => i.id === billEntryId ? { ...i, quantity: val } : i));
+                              }
+                              setEditingQtyId(null);
+                            }
+                          }}
+                          className="w-10 h-8 text-center bg-white text-[10px] font-black outline-none border-x border-gray-100"
+                        />
+                      ) : (
+                        <span 
+                          onClick={() => {
+                            setEditingQtyId(billEntryId);
+                            setQtyInput(qty.toString());
+                          }}
+                          className="px-2 min-w-[24px] text-center font-black text-gray-800 text-xs cursor-text hover:bg-white transition-colors"
+                        >
+                          {qty}
+                        </span>
+                      )
+                    )}
+                    <button 
+                      disabled={p.stockQuantity === 0 || qty >= (p.stockQuantity ?? 999999)}
+                      onClick={() => incrementItem(p)} 
+                      className={cn(
+                        "w-8 h-8 flex items-center justify-center transition-all",
+                        (p.stockQuantity === 0 || qty >= (p.stockQuantity ?? 999999)) ? "opacity-30 cursor-not-allowed bg-gray-100 text-gray-300" : 
+                        isSelected ? "bg-green-600 text-white" : "text-gray-400 hover:text-green-600 active:scale-90"
+                      )}
+                    >
+                      <Plus size={14} strokeWidth={3} />
+                    </button>
+                  </div>
+
                   {isSelected && (
                     <button 
-                      onClick={() => decrementItem(billEntryId)} 
-                      className="w-8 h-8 rounded-xl bg-red-50 text-red-500 flex items-center justify-center active:scale-90 transition-transform"
+                      onClick={() => removeItemFromBill(billEntryId)}
+                      className="w-8 h-8 rounded-xl bg-red-50 text-red-500 flex items-center justify-center active:scale-90 transition-transform hover:bg-red-100"
                     >
-                      <Minus size={16} strokeWidth={3} />
+                      <Trash2 size={14} />
                     </button>
                   )}
-                  {isSelected && (
-                    <span className="w-8 text-center font-black text-gray-800 text-sm">{qty}</span>
-                  )}
-                  <button 
-                    onClick={() => incrementItem(p)} 
-                    className={cn(
-                      "w-8 h-8 rounded-xl flex items-center justify-center active:scale-90 transition-transform",
-                      isSelected ? "bg-green-600 text-white" : "bg-gray-100 text-gray-500"
-                    )}
-                  >
-                    <Plus size={16} strokeWidth={3} />
-                  </button>
                 </div>
               </div>
             );
@@ -427,6 +632,94 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
             </button>
           </div>
         </div>
+
+        {/* Auto Download System */}
+        <div className="pt-2 border-t border-gray-50 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] font-bold text-gray-400 uppercase flex items-center gap-2 cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  checked={autoDownloadEnabled}
+                  onChange={(e) => setAutoDownloadEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                {t.autoDownload || "Auto Download Bill"}
+              </label>
+              <button 
+                onClick={() => setShowDiamondMenu(!showDiamondMenu)}
+                className={cn(
+                  "p-1 rounded-lg transition-all",
+                  showDiamondMenu ? "bg-blue-100 text-blue-600" : "text-gray-300 hover:text-blue-500"
+                )}
+              >
+                <Globe size={14} className={cn(autoDownloadEnabled && "text-blue-500")} />
+              </button>
+            </div>
+          </div>
+
+          <AnimatePresence>
+            {showDiamondMenu && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                className="bg-blue-50/50 p-3 rounded-2xl border border-blue-100 space-y-2 overflow-hidden"
+              >
+                <p className="text-[9px] font-black text-blue-600 uppercase mb-1">Download Preference</p>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={autoDownloadOptions.onSave}
+                    onChange={(e) => setAutoDownloadOptions(prev => ({ ...prev, onSave: e.target.checked }))}
+                    className="w-3.5 h-3.5 rounded border-blue-200 text-blue-600"
+                  />
+                  <span className="text-[10px] font-bold text-blue-700">Apply on Save Bill</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={autoDownloadOptions.onNoSave}
+                    onChange={(e) => setAutoDownloadOptions(prev => ({ ...prev, onNoSave: e.target.checked }))}
+                    className="w-3.5 h-3.5 rounded border-blue-200 text-blue-600"
+                  />
+                  <span className="text-[10px] font-bold text-blue-700">Apply on Don't Save Bill</span>
+                </label>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="space-y-2 pt-1">
+            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Default Action Preference</p>
+            <div className="flex gap-2">
+              <button 
+                onClick={() => setSavePreference('always')}
+                className={cn(
+                  "flex-1 py-2 rounded-xl text-[10px] font-black transition-all border",
+                  savePreference === 'always' ? "bg-green-600 text-white border-green-600" : "bg-white text-gray-400 border-gray-100"
+                )}
+              >
+                Always Save
+              </button>
+              <button 
+                onClick={() => setSavePreference('never')}
+                className={cn(
+                  "flex-1 py-2 rounded-xl text-[10px] font-black transition-all border",
+                  savePreference === 'never' ? "bg-gray-800 text-white border-gray-800" : "bg-white text-gray-400 border-gray-100"
+                )}
+              >
+                Never Save
+              </button>
+              <button 
+                onClick={() => setSavePreference('ask')}
+                className={cn(
+                  "flex-1 py-2 rounded-xl text-[10px] font-black transition-all border",
+                  savePreference === 'ask' ? "bg-blue-100 text-blue-700 border-blue-200" : "bg-white text-gray-400 border-gray-100"
+                )}
+              >
+                Ask Me
+              </button>
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* ═══════ SECTION 6: STICKY BOTTOM ACTIONS ═══════ */}
@@ -436,84 +729,99 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
              <p className="text-[10px] font-bold text-gray-400 uppercase">{t.total || "Total"}</p>
              <p className="text-2xl font-black text-green-600">₹{total}</p>
           </div>
+          
           <div className="space-y-2 relative">
-            {/* WhatsApp Button */}
-            {(!isProUser && (shop?.whatsappCount || 0) >= 10 && (shop?.lastWhatsappDate === new Date().toDateString())) ? (
-              <button
-                onClick={() => setShowPricing(true)}
-                className="w-full bg-white text-orange-600 border-2 border-orange-600 py-4 rounded-2xl font-black text-xs shadow-sm flex items-center justify-center gap-2"
-              >
-                👑 Upgrade to unlock more messages
-              </button>
+            {/* STEP 2: READY (Actions) */}
+            {billingStep === 'ready' ? (
+              <div className="space-y-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                <div className={cn(
+                  "p-3 rounded-2xl border text-center mb-1",
+                  isSavedInDB ? "bg-green-50 border-green-100 text-green-700" : "bg-gray-50 border-gray-100 text-gray-600"
+                )}>
+                  <p className="font-black text-sm flex items-center justify-center gap-2">
+                    {isSavedInDB ? (
+                      <><CheckCircle2 size={16} /> {t.billCreated || "Bill Saved & Stock Updated"}</>
+                    ) : (
+                      <><Globe size={16} /> Bill Generated (Not Saved)</>
+                    )}
+                  </p>
+                </div>
+                
+                <div className="space-y-2">
+                  <button
+                    onClick={executeWhatsApp}
+                    className="w-full bg-green-600 text-white py-4 rounded-2xl font-black text-base shadow-lg flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                  >
+                    <MessageCircle size={20} /> {t.sendOnWhatsApp}
+                  </button>
+
+                  {!autoDownloadEnabled && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => setShowBillPreview(true)}
+                        className="bg-white text-green-600 border-2 border-green-600 py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2"
+                      >
+                        👁 {t.viewBill || "View Bill"}
+                      </button>
+                      <button
+                        onClick={executeDownload}
+                        className="bg-white text-blue-600 border-2 border-blue-600 py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2"
+                      >
+                        📥 {t.downloadBill || "Download"}
+                      </button>
+                    </div>
+                  )}
+                  
+                  <button
+                    onClick={resetBilling}
+                    className="w-full bg-gray-100 text-gray-800 py-3 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 mt-2"
+                  >
+                    ✨ {t.newBill}
+                  </button>
+                </div>
+              </div>
+            ) : billingStep === 'deciding' ? (
+              /* STEP 1: DECISION (Save vs Don't Save) */
+              <div className="grid grid-cols-1 gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                 <button
+                    onClick={() => handleDecision(true)}
+                    className="w-full bg-green-600 text-white py-4 rounded-3xl font-black text-base shadow-xl flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                  >
+                    <CheckCircle2 size={20} /> Save Bill (Stock Update)
+                  </button>
+                  <button
+                    onClick={() => handleDecision(false)}
+                    className="w-full bg-white text-gray-800 border-2 border-gray-200 py-4 rounded-3xl font-black text-base flex items-center justify-center gap-2 active:scale-[0.98] transition-all"
+                  >
+                    <X size={20} /> Don't Save (Just Send)
+                  </button>
+                  <button onClick={() => setBillingStep('editing')} className="text-xs font-bold text-gray-400 py-2">← Back to editing</button>
+              </div>
             ) : (
-              <button
-                disabled={billItems.length === 0 || isSavingBill || isGeneratingBill}
-                onClick={async () => {
-                  const canSend = await checkWhatsAppLimit();
-                  if (!canSend) {
-                     setShowPricing(true);
-                     return;
-                  }
-
-                  setIsGeneratingBill(true);
-                  
-                  // Save bill first
-                  await handleCreateBill(selectedCustomer, billItems, billStatus, billLang);
-
-                  // Open WhatsApp ONLY
-                  const phone = selectedCustomerData?.phone || tempWhatsAppPhone || '';
-                  const cleanPhone = phone.replace(/\D/g, "");
-                  if (cleanPhone) {
-                    const finalPhone = cleanPhone.startsWith("91") ? cleanPhone : "91" + cleanPhone;
-                    const msg = encodeURIComponent("Your bill is ready.");
-                    window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
-                  } else {
-                    setShowWhatsAppPhonePrompt(true);
-                  }
-                  
-                  setIsGeneratingBill(false);
-                  setBillItems([]);
-                  setSelectedCustomer("");
-                }}
-                className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-base shadow-lg hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                {isGeneratingBill || isSavingBill ? (
-                  <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" />
-                ) : (
-                  "📲 Send on WhatsApp"
+              /* STEP 0: IDLE (Finalize) */
+              <div className="space-y-2">
+                {!isProUser && (shop?.dailyFinalizeCount || 0) >= 15 && (
+                  <button 
+                    onClick={() => setShowPricing(true)}
+                    className="w-full bg-blue-50 text-blue-600 py-3 rounded-2xl font-black text-xs flex items-center justify-center gap-2 border border-blue-100 animate-pulse mb-1"
+                  >
+                    <Rocket size={14} /> 🚀 Upgrade to Premium for unlimited billing
+                  </button>
                 )}
-              </button>
-            )}
-
-            {/* View Professional Bill Button */}
-            {(!isProUser && (shop?.billViewCount || 0) >= 10 && (shop?.lastBillViewDate === new Date().toDateString())) ? (
-              <button
-                onClick={() => setShowPricing(true)}
-                className="w-full bg-white text-green-600 border-2 border-green-600 py-3 rounded-2xl font-black text-xs shadow-sm flex items-center justify-center gap-2"
-              >
-                👑 Upgrade to unlock Professional Bills
-              </button>
-            ) : (
-              <button
-                disabled={billItems.length === 0 || isSavingBill || isGeneratingBill}
-                onClick={async () => {
-                   if (!isProUser) {
-                     const canView = await checkBillViewLimit();
-                     if (!canView) {
-                       setShowPricing(true);
-                       return;
-                     }
-                   }
-                   setShowBillPreview(true);
-                }}
-                className="w-full bg-white text-green-600 border-2 border-green-600 py-3 rounded-2xl font-bold text-sm shadow-sm hover:bg-green-50 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-              >
-                👁 View Professional Bill
-              </button>
+                <button
+                  disabled={billItems.length === 0 || isSavingBill || (typeof isGeneratingBill !== 'undefined' && isGeneratingBill) || (!isProUser && (shop?.dailyFinalizeCount || 0) >= 15)}
+                  onClick={initiateBilling}
+                  className="w-full bg-green-600 text-white py-5 rounded-[2rem] font-black text-lg shadow-[0_15px_30px_rgba(22,163,74,0.3)] hover:bg-green-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2 active:scale-[0.98]"
+                >
+                  <span className="text-2xl font-black">₹</span> Finalize Bill
+                </button>
+              </div>
             )}
             
             {!isProUser && (
-              <p className="text-[9px] text-center text-gray-400 font-bold tracking-tight">Free plan: 10 actions/day</p>
+              <p className="text-[10px] text-center text-gray-400 font-bold tracking-tight mt-3">
+                Free Plan: 15 bills/day • {Math.max(0, 15 - (shop?.dailyFinalizeCount || 0))} remaining today
+              </p>
             )}
           </div>
         </div>
@@ -588,70 +896,31 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
         {showWhatsAppPhonePrompt && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white p-6 rounded-[2rem] shadow-xl w-full max-w-sm">
-              <h3 className="font-bold text-gray-800 text-lg mb-1">Send WhatsApp Bill</h3>
-              <p className="text-xs text-gray-400 mb-4">Enter phone number to send bill</p>
+              <h3 className="font-bold text-gray-800 text-lg mb-1">Customer Phone</h3>
+              <p className="text-xs text-gray-400 mb-4">Enter phone number to send bill via WhatsApp</p>
               <input 
                 type="tel" 
                 autoFocus 
-                placeholder="Phone Number"
+                placeholder="Phone Number (e.g. 9876543210)"
                 value={tempWhatsAppPhone} 
                 onChange={e=>setTempWhatsAppPhone(e.target.value)} 
-                className="w-full bg-gray-50 border border-gray-200 outline-none p-4 rounded-2xl font-bold text-xl mb-4" 
+                className="w-full bg-gray-50 border border-gray-200 outline-none p-4 rounded-2xl font-bold text-xl mb-4 text-center tracking-widest" 
               />
               <div className="flex gap-3">
-                <button onClick={()=>{ setShowWhatsAppPhonePrompt(false); setTempWhatsAppPhone(""); }} className="flex-1 py-3 bg-gray-100 text-gray-600 font-bold rounded-xl text-sm">{t.cancel || "Cancel"}</button>
+                <button onClick={()=>{ setShowWhatsAppPhonePrompt(false); setTempWhatsAppPhone(""); }} className="flex-1 py-3 bg-gray-100 text-gray-600 font-bold rounded-xl text-sm">Cancel</button>
                 <button 
-                  onClick={async () => {
+                  onClick={() => {
                     const cleanPhone = tempWhatsAppPhone.replace(/\D/g, "");
                     if (cleanPhone.length < 10) {
-                      setLocalToast("Please enter a valid phone number");
+                      setLocalToast("Enter a valid 10-digit number");
                       return;
                     }
-
-                    const canSend = await checkWhatsAppLimit();
-                    if (!canSend) {
-                      setLocalToast("WhatsApp limit reached (10/day). Upgrade to Pro!");
-                      return;
-                    }
-                    
-                    setIsGeneratingBill(true);
                     setShowWhatsAppPhonePrompt(false);
-                    
-                    // Create bill as walk-in with this phone for WhatsApp only
-                    await handleCreateBill("", billItems, billStatus, billLang);
-
-                    try {
-                      const html2canvas = (await import('html2canvas')).default;
-                      const canvas = await html2canvas(billTemplateRef.current, { scale: 2, backgroundColor: '#ffffff' });
-                      const dataUrl = canvas.toDataURL('image/png');
-                      
-                      const a = document.createElement('a');
-                      a.style.display = 'none';
-                      a.href = dataUrl;
-                      a.download = `Bill_WalkIn.png`;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-
-                      setLocalToast("Bill downloaded. Please attach in WhatsApp.");
-                      
-                      const finalPhone = cleanPhone.startsWith("91") ? cleanPhone : "91" + cleanPhone;
-                      const msg = encodeURIComponent("Your bill is ready.");
-                      setTimeout(() => {
-                        window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
-                      }, 500);
-                    } catch (err) {
-                      console.error("Error generating bill: ", err);
-                    } finally {
-                      setBillItems([]);
-                      setSelectedCustomer("");
-                      setTempWhatsAppPhone("");
-                      setIsGeneratingBill(false);
-                    }
+                    executeWhatsApp();
                   }} 
-                  className="flex-1 py-3 bg-green-600 text-white font-bold rounded-xl text-sm"
+                  className="flex-1 py-3 bg-green-600 text-white font-bold rounded-xl text-sm shadow-lg active:scale-95"
                 >
-                  Send
+                  Confirm Send
                 </button>
               </div>
             </motion.div>
@@ -664,79 +933,49 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
         {showBillPreview && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[60] flex items-end sm:items-center justify-center p-4">
             <motion.div
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              className="bg-white w-full max-w-md rounded-t-[40px] sm:rounded-[40px] p-6 shadow-2xl overflow-y-auto max-h-[90vh] pb-32"
+              initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
+              className="bg-white w-full max-w-md rounded-t-[40px] sm:rounded-[40px] p-6 shadow-2xl overflow-y-auto max-h-[90vh] pb-10"
             >
               <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-bold text-gray-800">Preview Bill</h3>
+                <h3 className="text-xl font-black text-gray-800">Bill Preview</h3>
                 <button onClick={() => setShowBillPreview(false)} className="p-2 bg-gray-100 rounded-full text-gray-500">
                   <X size={20} />
                 </button>
               </div>
 
-              <div className="flex justify-center mb-6 border border-gray-200 bg-gray-50 p-4 rounded-3xl max-h-[50vh] overflow-y-auto no-scrollbar relative">
-                <div className="origin-top" style={{ transform: 'scale(0.75)' }}>
+              <div className="border border-gray-100 bg-gray-50 p-4 rounded-[2.5rem] overflow-hidden mb-6 flex justify-center">
+                <div style={{ transform: 'scale(0.85)', transformOrigin: 'top center' }}>
                   <BillTemplate 
                     shop={shop}
-                    customer={selectedCustomerData}
+                    customer={selectedCustomerData || { name: t.walkInCustomer, phone: tempWhatsAppPhone }}
                     items={billItems}
                     total={total}
                     billStatus={billStatus}
+                    ref={null}
                   />
                 </div>
               </div>
 
               <button
-                onClick={async () => {
-                  if (!isProUser) {
-                    const canView = await checkBillViewLimit();
-                    if (!canView) {
-                      setLocalToast("Daily limit reached. Upgrade to Pro!");
-                      return;
-                    }
-                  }
-                  if (!billTemplateRef.current) return;
-                  setIsGeneratingBill(true);
-                  try {
-                    const html2canvas = (await import('html2canvas')).default;
-                    const canvas = await html2canvas(billTemplateRef.current, { scale: 2, backgroundColor: '#ffffff' });
-                    const dataUrl = canvas.toDataURL('image/png');
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = dataUrl;
-                    a.download = `Bill_${selectedCustomerData?.name || 'Customer'}.png`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    setLocalToast("Bill downloaded successfully!");
-                    setShowBillPreview(false);
-                  } catch (err) {
-                    console.error("Error generating bill: ", err);
-                  } finally {
-                    setIsGeneratingBill(false);
-                  }
+                onClick={() => {
+                  setShowBillPreview(false);
+                  executeDownload();
                 }}
-                className={cn(
-                  "w-full py-4 rounded-2xl font-bold text-base shadow-sm flex items-center justify-center gap-2 transition-all border",
-                  isProUser ? "bg-white text-green-600 border-2 border-green-600 hover:bg-green-50" : "bg-gray-50 text-gray-400 border-gray-100"
-                )}
-                disabled={isGeneratingBill || isSavingBill}
+                className="w-full py-4 bg-gray-900 text-white rounded-2xl font-black text-base shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all"
               >
-                Download Bill
+                📥 Download PNG
               </button>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
-      {/* Hidden bill template for html2canvas */}
-      <div style={{ position: 'absolute', left: '-9999px', top: '-9999px' }}>
+      {/* Hidden bill template for html2canvas generation */}
+      <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', pointerEvents: 'none' }}>
         <BillTemplate 
           ref={billTemplateRef}
           shop={shop}
-          customer={selectedCustomerData}
+          customer={selectedCustomerData || { name: t.walkInCustomer, phone: tempWhatsAppPhone }}
           items={billItems}
           total={total}
           billStatus={billStatus}

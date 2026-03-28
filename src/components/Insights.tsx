@@ -2,7 +2,7 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { 
   TrendingUp, 
   TrendingDown, 
-  DollarSign, 
+  IndianRupee, 
   History, 
   CheckCircle2, 
   Users, 
@@ -372,7 +372,7 @@ export const Insights = React.memo(() => {
             <div className="flex items-center justify-between">
               <h2 className="text-3xl font-black">₹{stats.earnings}</h2>
               <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                <DollarSign size={24} />
+                <IndianRupee size={24} />
               </div>
             </div>
           </motion.div>

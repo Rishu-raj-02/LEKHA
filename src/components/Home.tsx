@@ -3,7 +3,7 @@ import {
   TrendingUp,
   AlertCircle,
   Users,
-  Receipt,
+  IndianRupee,
   History,
   MessageCircle,
   CheckCircle2
@@ -66,7 +66,7 @@ export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUd
         <div className="grid grid-cols-3 gap-3">
           {[
             { id: "customer", icon: Users, label: t.addCustomer, color: "bg-green-50 text-green-600", action: () => setShowAddCustomer(true) },
-            { id: "bill", icon: Receipt, label: t.createBill, color: "bg-blue-50 text-blue-600", action: () => setActiveTab("billing") },
+            { id: "bill", icon: IndianRupee, label: t.createBill, color: "bg-blue-50 text-blue-600", action: () => setActiveTab("billing") },
             { id: "udhar", icon: History, label: t.addUdhar, color: "bg-orange-50 text-orange-600", action: () => setShowAddUdhar(true) },
           ].map((btn) => (
             <button

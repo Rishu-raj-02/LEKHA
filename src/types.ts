@@ -12,6 +12,9 @@ export interface Shop {
   lastWhatsappDate?: string;
   billViewCount?: number;
   lastBillViewDate?: string;
+  hasSeenWelcome?: boolean;
+  dailyFinalizeCount?: number;
+  lastFinalizeDate?: string;
 }
 
 export interface Customer {
@@ -36,13 +39,14 @@ export interface Product {
 
 export interface Bill {
   id: string;
-  customer_id: string;
-  customer_name?: string;
-  total_amount: number;
-  total_cost?: number;
-  total_profit?: number;
+  items: BillItem[];
+  customer: { 
+    name: string; 
+    phone: string | null;
+  };
+  totalAmount: number;
+  status: "paid" | "pending";
   created_at: any;
-  items?: BillItem[]; 
   isArchived?: boolean;
 }
 
