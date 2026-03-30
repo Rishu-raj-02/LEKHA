@@ -30,8 +30,8 @@ export const Home = React.memo(({ setActiveTab, setShowAddCustomer, setShowAddUd
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const todayBills = bills.filter(b => ensureDate(b.created_at) >= today);
-  const todaySales = todayBills.reduce((acc, b) => acc + (b.total_amount || 0), 0);
-  const totalUdhar = customers.reduce((acc, c) => acc + (c.total_udhar || 0), 0);
+  const todaySales = todayBills.reduce((acc, b) => acc + (b.totalAmount || (b as any).total_amount || 0), 0);
+  const totalUdhar = udharList.filter(u => u.status === "pending").reduce((acc, u) => acc + u.amount, 0);
 
   return (
     <div className="space-y-6">

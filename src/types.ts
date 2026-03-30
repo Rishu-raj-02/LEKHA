@@ -62,8 +62,10 @@ export interface Udhar {
   id: string;
   customer_id: string;
   customer_name?: string;
+  customer_phone?: string;
   amount: number;
   status: "pending" | "paid";
+  type?: "bill" | "manual";
   due_date?: string;
   created_at: any;
 }

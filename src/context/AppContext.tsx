@@ -46,6 +46,10 @@ interface AppContextType {
   checkFinalizeLimit: () => Promise<boolean>;
   showReportPopup: MonthlyReport | null;
   dismissReportPopup: () => void;
+  recentlyUsedIds: string[];
+  markProductAsUsed: (id: string) => void;
+  prefillProductName: string;
+  setPrefillProductName: (name: string) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -77,6 +81,11 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [error, setError] = useState<string | null>(null);
   const [monthlyReports, setMonthlyReports] = useState<MonthlyReport[]>([]);
   const [showReportPopup, setShowReportPopup] = useState<MonthlyReport | null>(null);
+  const [recentlyUsedIds, setRecentlyUsedIds] = useState<string[]>(() => {
+    const cached = localStorage.getItem('lekha_recent_items');
+    return cached ? JSON.parse(cached) : [];
+  });
+  const [prefillProductName, setPrefillProductName] = useState("");
   const [archivalDone, setArchivalDone] = useState(false);
   const dismissReportPopup = useCallback(() => setShowReportPopup(null), []);
 
@@ -352,10 +361,19 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     if (!user) return;
     try {
       await deleteDoc(doc(db, "shops", user.uid, "products", productId));
+      setRecentlyUsedIds(prev => prev.filter(id => id !== productId));
     } catch (err) {
       console.error("Delete Product Error:", err);
     }
   }, [user]);
+
+  const markProductAsUsed = React.useCallback((id: string) => {
+    setRecentlyUsedIds(prev => {
+      const newRecent = [id, ...prev.filter(i => i !== id)].slice(0, 5);
+      localStorage.setItem('lekha_recent_items', JSON.stringify(newRecent));
+      return newRecent;
+    });
+  }, []);
 
   const contextValue = React.useMemo(() => ({
     user,
@@ -378,8 +396,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     updateProductStock,
     deleteProduct,
     showReportPopup,
-    dismissReportPopup
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup]);
+    dismissReportPopup,
+    recentlyUsedIds,
+    markProductAsUsed,
+    prefillProductName,
+    setPrefillProductName
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup, recentlyUsedIds, markProductAsUsed, prefillProductName]);
 
   return (
     <AppContext.Provider value={contextValue}>

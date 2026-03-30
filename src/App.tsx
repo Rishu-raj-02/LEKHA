@@ -54,7 +54,7 @@ const PremiumLock = ({ title, onUpgrade }: { title: string, onUpgrade: () => voi
 );
 
 function AppContent() {
-  const { user, shop, loading, lang, setLang, customers, products, setShop, error, login, isProUser, isPlanExpired, showReportPopup, dismissReportPopup } = useApp();
+  const { user, shop, loading, lang, setLang, customers, products, setShop, error, login, isProUser, isPlanExpired, showReportPopup, dismissReportPopup, prefillProductName, setPrefillProductName } = useApp();
   const t = translations[lang];
 
   const [activeTab, setActiveTab] = useState("home");
@@ -162,6 +162,16 @@ function AppContent() {
     }
 
     const finalPhone = cleanPhone.startsWith("91") ? "+" + cleanPhone : "+91" + cleanPhone;
+
+    // RULE: Enforce unique phone number
+    const existing = customers.find(c => c.phone === finalPhone);
+    if (existing) {
+      setToast({ message: `Customer already exists: ${existing.name}`, type: "error" });
+      setShowAddCustomer(false);
+      form.reset();
+      return;
+    }
+
     const customerData = {
       name: formData.get("name") as string,
       phone: finalPhone,
@@ -211,6 +221,7 @@ function AppContent() {
       await addDoc(collection(db, "shops", user.uid, "products"), productData);
       setToast({ message: t.addItem + " Success", type: "success" });
       setShowAddProduct(false);
+      setPrefillProductName(""); // Clear prefill on success
       form.reset();
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `shops/${user.uid}/products`);
@@ -228,10 +239,15 @@ function AppContent() {
     const customerId = formData.get("customer_id") as string;
     const amount = Number(formData.get("amount"));
     const dueDate = formData.get("due_date") as string;
+    const selectedC = customers.find(c => c.id === customerId);
+    
     const udharData = {
       customer_id: customerId,
+      customer_name: selectedC?.name || "Unknown",
+      customer_phone: selectedC?.phone || "",
       amount: amount,
       status: "pending",
+      type: "manual",
       due_date: dueDate || null,
       created_at: Timestamp.now(),
     };
@@ -315,19 +331,25 @@ function AppContent() {
       await addDoc(collection(db, "shops", user.uid, "bills"), billData);
       
       // Handle Udhar if pending
-      if (billStatus === "pending" && customerId) {
+      if (billStatus === "pending") {
         await addDoc(collection(db, "shops", user.uid, "udhar"), {
-          customer_id: customerId,
+          customer_id: customerId || "walkin",
+          customer_name: customerData.name,
+          customer_phone: customerData.phone || "",
           amount: totalAmount,
           status: "pending",
+          type: "bill",
           due_date: null,
           created_at: Timestamp.now(),
         });
-        const customerRef = doc(db, "shops", user.uid, "customers", customerId);
-        const customerDoc = await getDoc(customerRef);
-        if (customerDoc.exists()) {
-          const currentUdhar = customerDoc.data().total_udhar || 0;
-          await updateDoc(customerRef, { total_udhar: currentUdhar + totalAmount });
+        
+        if (customerId) {
+          const customerRef = doc(db, "shops", user.uid, "customers", customerId);
+          const customerDoc = await getDoc(customerRef);
+          if (customerDoc.exists()) {
+            const currentUdhar = customerDoc.data().total_udhar || 0;
+            await updateDoc(customerRef, { total_udhar: currentUdhar + totalAmount });
+          }
         }
       }
       
@@ -692,9 +714,9 @@ function AppContent() {
         </form>
       </Modal>
 
-      <Modal isOpen={showAddProduct} onClose={() => setShowAddProduct(false)} title={t.addItem}>
+      <Modal isOpen={showAddProduct} onClose={() => { setShowAddProduct(false); setPrefillProductName(""); }} title={t.addItem}>
         <form onSubmit={handleAddProduct} className="space-y-4">
-          <input name="name" required placeholder={t.name} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+          <input name="name" required placeholder={t.name} defaultValue={prefillProductName} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
           <div className="grid grid-cols-2 gap-2">
             <input name="price" type="number" required placeholder={t.price} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
             <input name="category" placeholder={t.category} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
@@ -702,10 +724,13 @@ function AppContent() {
 
           <div className="relative">
             {!isProUser && (
-              <div className="absolute inset-0 z-10 bg-white/60 backdrop-blur-sm flex items-center justify-center rounded-2xl border border-gray-100">
-                <span className="text-xs font-bold text-gray-800 bg-white px-3 py-1.5 rounded-full shadow-sm border border-gray-100 flex items-center gap-1">
-                  <span className="text-green-600">👑</span> Upgrade to unlock Inventory
-                </span>
+              <div 
+                className="absolute inset-0 z-10 bg-white/60 backdrop-blur-sm flex items-center justify-center rounded-2xl border border-gray-100 cursor-pointer group"
+                onClick={() => { setShowAddProduct(false); setPrefillProductName(""); setShowPricing(true); }}
+              >
+                <div className="text-xs font-bold text-gray-800 bg-white px-4 py-2 rounded-full shadow-lg border border-gray-100 flex items-center gap-2 group-hover:scale-105 group-active:scale-95 transition-all">
+                  <span className="text-green-600 text-sm">👑</span> Upgrade to unlock Inventory
+                </div>
               </div>
             )}
             <div className="bg-gray-50 p-4 rounded-2xl grid grid-cols-2 gap-3 border border-gray-100">

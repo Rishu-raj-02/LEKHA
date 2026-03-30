@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
-import { Search, X, User as UserIcon, Phone, MessageCircle, Plus } from "lucide-react";
+import { Search, X, User as UserIcon, Phone, MessageCircle, Plus, Edit3, Trash2, AlertTriangle } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { cn, openWhatsApp } from "../utils/helpers";
 import { HighlightedText } from "./ui/HighlightedText";
 import { translations } from "../translations";
+import { Modal } from "./ui/Modal";
+import { db, doc, updateDoc, deleteDoc } from "../firebase";
 import { useDebounce } from '../hooks/useDebounce';
 
 interface CustomersProps {
@@ -15,6 +17,11 @@ export const Customers = React.memo(({ setShowAddCustomer }: CustomersProps) => 
   const { customers, shop, lang } = useApp();
   const t = translations[lang];
   
+  const [editingCustomer, setEditingCustomer] = useState<any | null>(null);
+  const [newName, setNewName] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 300);
 
@@ -24,6 +31,45 @@ export const Customers = React.memo(({ setShowAddCustomer }: CustomersProps) => 
       (c.phone || "").includes(debouncedSearch)
     );
   }, [customers, debouncedSearch]);
+
+  const handleUpdateName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCustomer || !newName.trim() || !shop) return;
+
+    setIsUpdating(true);
+    try {
+      await updateDoc(doc(db, "shops", shop.id, "customers", editingCustomer.id), {
+        name: newName.trim()
+      });
+      setEditingCustomer(null);
+      setNewName("");
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleDeleteCustomer = () => {
+    if (!editingCustomer || !shop) return;
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!editingCustomer || !shop) return;
+
+    setIsUpdating(true);
+    try {
+      await deleteDoc(doc(db, "shops", shop.id, "customers", editingCustomer.id));
+      setShowDeleteConfirm(false);
+      setEditingCustomer(null);
+      setNewName("");
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
 
   if (!shop) return null;
 
@@ -67,9 +113,20 @@ export const Customers = React.memo(({ setShowAddCustomer }: CustomersProps) => 
                   {c.name[0]}
                 </div>
                 <div>
-                  <p className="font-bold text-gray-800">
-                    <HighlightedText text={c.name} highlight={debouncedSearch} />
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-gray-800">
+                      <HighlightedText text={c.name} highlight={debouncedSearch} />
+                    </p>
+                    <button 
+                      onClick={() => {
+                        setEditingCustomer(c);
+                        setNewName(c.name);
+                      }}
+                      className="p-1 text-gray-300 hover:text-blue-500 transition-colors"
+                    >
+                      <Edit3 size={14} />
+                    </button>
+                  </div>
                   <p className={cn("text-xs", c.phone.replace(/\D/g, "").length < 10 ? "text-red-500 font-bold" : "text-gray-500")}>
                     <HighlightedText text={c.phone} highlight={debouncedSearch} />
                     {c.phone.replace(/\D/g, "").length < 10 && " (Invalid)"}
@@ -103,6 +160,89 @@ export const Customers = React.memo(({ setShowAddCustomer }: CustomersProps) => 
       >
         <Plus size={32} strokeWidth={3} />
       </button>
+
+      {/* Edit Name Modal */}
+      <Modal 
+        isOpen={!!editingCustomer} 
+        onClose={() => setEditingCustomer(null)} 
+        title="Edit Name"
+      >
+        <form onSubmit={handleUpdateName} className="space-y-4">
+          <div>
+            <label className="text-[10px] font-bold text-gray-400 uppercase px-4">{t.name}</label>
+            <input 
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              required 
+              placeholder="Enter new name" 
+              className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" 
+            />
+          </div>
+          <button 
+            disabled={isUpdating} 
+            type="submit" 
+            className="w-full bg-green-600 text-white py-4 rounded-2xl font-black text-lg shadow-lg flex items-center justify-center gap-2 hover:bg-green-700 active:scale-95 transition-all mt-4"
+          >
+            {isUpdating ? <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" /> : t.save}
+          </button>
+          <button 
+            type="button" 
+            onClick={() => setEditingCustomer(null)}
+            className="w-full bg-gray-100 text-gray-600 font-bold py-3 rounded-2xl active:scale-95 transition-all"
+          >
+            {t.cancel}
+          </button>
+          
+          <div className="pt-4 border-t border-gray-50 flex justify-center">
+            <button
+               type="button"
+               disabled={isUpdating}
+               onClick={handleDeleteCustomer}
+               className="flex items-center gap-2 text-xs font-bold text-red-500 hover:text-red-700 transition-colors uppercase tracking-wider p-2"
+            >
+              <Trash2 size={14} />
+              Delete Customer
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete Confirmation Modal */}
+      <Modal 
+        isOpen={showDeleteConfirm} 
+        onClose={() => setShowDeleteConfirm(false)} 
+        title="Delete Customer?"
+      >
+        <div className="flex flex-col items-center text-center space-y-6 py-4">
+          <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center animate-bounce">
+            <AlertTriangle size={40} />
+          </div>
+          
+          <div className="space-y-2">
+            <h3 className="text-xl font-black text-gray-800">Are you sure?</h3>
+            <p className="text-gray-500 font-medium">
+              You are about to delete <span className="text-gray-800 font-bold">"{editingCustomer?.name}"</span> permanently.
+              <br/>Existing udhar entries will remain, but the profile will be gone.
+            </p>
+          </div>
+
+          <div className="w-full space-y-3 pt-4">
+            <button
+               disabled={isUpdating}
+               onClick={confirmDelete}
+               className="w-full bg-red-600 text-white py-4 rounded-2xl font-black text-lg shadow-lg shadow-red-200 active:scale-95 transition-all flex items-center justify-center gap-2"
+            >
+              {isUpdating ? <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" /> : "Yes, Delete Customer"}
+            </button>
+            <button
+               onClick={() => setShowDeleteConfirm(false)}
+               className="w-full bg-gray-100 text-gray-600 font-bold py-4 rounded-2xl active:scale-95 transition-all"
+            >
+              No, Keep Profile
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 });
