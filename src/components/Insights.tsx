@@ -1,33 +1,58 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  IndianRupee, 
-  History, 
-  CheckCircle2, 
-  Users, 
-  Package, 
-  AlertCircle,
+import React, { useMemo, useState } from 'react';
+import {
+  IndianRupee,
+  TrendingUp,
+  AlertTriangle,
+  ShoppingBag,
+  Users,
+  Crown,
+  Lock,
+  BarChart3,
+  CalendarDays,
+  Plus,
   ArrowUpRight,
   ArrowDownRight,
-  Lock,
-  Crown,
-  BrainCircuit,
-  Activity,
-  Trophy
+  Percent,
+  Wallet,
 } from "lucide-react";
-import { db, doc, updateDoc, Timestamp, onSnapshot, setDoc } from "../firebase";
-import { Modal } from "./ui/Modal";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { translations } from "../translations";
-import { cn, ensureDate } from "../utils/helpers";
+import { ensureDate } from "../utils/helpers";
+import { Timestamp, updateDoc, doc, db } from "../firebase";
+import { Modal } from "./ui/Modal";
+
+// ─── Helpers ───
+const getAmount = (b: any): number => b.totalAmount || b.total_amount || 0;
+const getProfit = (b: any): number => {
+  if (b.total_profit != null) return b.total_profit;
+  return (b.items || []).reduce((acc: number, item: any) => {
+    return acc + ((item.price - (item.cost_price || 0)) * (item.quantity || 1));
+  }, 0);
+};
+const getCost = (b: any): number => {
+  if (b.total_cost != null) return b.total_cost;
+  return (b.items || []).reduce((acc: number, item: any) => {
+    return acc + ((item.cost_price || 0) * (item.quantity || 1));
+  }, 0);
+};
+
+const fmt = (n: number): string => {
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(1)}Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(1)}L`;
+  if (n >= 1000) return `₹${(n / 1000).toFixed(1)}K`;
+  return `₹${Math.round(n)}`;
+};
+const fmtFull = (n: number | undefined | null): string => `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
 
 export const Insights = React.memo(() => {
-  const { bills, udharList, customers, products, lang, isProUser, user, shop, setShop } = useApp();
+  const { bills, udharList, customers, products, lang, isProUser, user, shop, setShop, updateMonthlyExpenses } = useApp();
   const t = translations[lang];
 
-  // --- Helper: Get Start of Today ---
+  const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
+
+  // ─── Time References ───
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
@@ -40,278 +65,151 @@ export const Insights = React.memo(() => {
     return d;
   }, [today]);
 
-  const [expenses, setExpenses] = useState({ electricity: 0, rent: 0, staff: 0, other: 0 });
-  const [showExpenseModal, setShowExpenseModal] = useState(false);
-  const currentMonthId = `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}`;
+  const currentMonthKey = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+  }, []);
 
-  useEffect(() => {
-    if (!user) return;
-    const unsub = onSnapshot(doc(db, "shops", user.uid, "expenses", currentMonthId), (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        setExpenses({
-          electricity: data.electricity || 0,
-          rent: data.rent || 0,
-          staff: data.staff || 0,
-          other: data.other || 0
-        });
-      } else {
-        setExpenses({ electricity: 0, rent: 0, staff: 0, other: 0 });
-      }
-    });
-    return () => unsub();
-  }, [user, currentMonthId]);
+  // ─── Expenses Logic ───
+  const currentExpenses = useMemo(() => {
+    return shop?.monthlyExpenses?.[currentMonthKey] || { electricity: 0, rent: 0, staff: 0, other: 0 };
+  }, [shop, currentMonthKey]);
 
-  const profitStats = useMemo(() => {
-    const todayBills = bills.filter(b => {
-      const date = ensureDate(b.created_at);
-      return date >= today;
-    });
+  const totalMonthlyExpenses = useMemo(() => {
+    return (currentExpenses.electricity || 0) + (currentExpenses.rent || 0) + (currentExpenses.staff || 0) + (currentExpenses.other || 0);
+  }, [currentExpenses]);
 
-    const currentMonthBills = bills.filter(b => {
-      const date = ensureDate(b.created_at);
-      return date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear();
-    });
-
-    const todayProfit = todayBills.reduce((acc, b) => acc + (b.total_profit || 0), 0);
-    const monthProfit = currentMonthBills.reduce((acc, b) => acc + (b.total_profit || 0), 0);
-    const totalProfit = bills.reduce((acc, b) => acc + (b.total_profit || 0), 0);
-
-    return { todayProfit, monthProfit, totalProfit };
+  // ─── CORE METRICS ───
+  const todaysSales = useMemo(() => {
+    return bills
+      .filter(b => ensureDate(b.created_at) >= today)
+      .reduce((acc, b) => acc + getAmount(b), 0);
   }, [bills, today]);
 
-  const totalMonthlyExpenses = expenses.electricity + expenses.rent + expenses.staff + expenses.other;
-  const netProfit = profitStats.monthProfit - totalMonthlyExpenses;
+  const yesterdaysSales = useMemo(() => {
+    return bills
+      .filter(b => {
+        const d = ensureDate(b.created_at);
+        return d >= yesterday && d < today;
+      })
+      .reduce((acc, b) => acc + getAmount(b), 0);
+  }, [bills, yesterday, today]);
 
-  // --- Advanced Analytics ---
-  const advancedStats = useMemo(() => {
-    // 1. Profit Trend (Last 7 Days)
-    const last7Days = Array.from({ length: 7 }, (_, i) => {
+  const todaysGrossProfit = useMemo(() => {
+    return bills
+      .filter(b => ensureDate(b.created_at) >= today)
+      .reduce((acc, b) => acc + getProfit(b), 0);
+  }, [bills, today]);
+
+  const totalSales = useMemo(() => {
+    return bills.reduce((acc, b) => acc + getAmount(b), 0);
+  }, [bills]);
+
+  const totalGrossProfit = useMemo(() => {
+    return bills.reduce((acc, b) => acc + getProfit(b), 0);
+  }, [bills]);
+
+  const pendingUdhar = useMemo(() => {
+    return udharList
+      .filter(u => u.status === 'pending')
+      .reduce((acc, u) => acc + u.amount, 0);
+  }, [udharList]);
+
+  // ─── SMART INSIGHTS ───
+  const avgBillValue = useMemo(() => {
+    return bills.length > 0 ? totalSales / bills.length : 0;
+  }, [totalSales, bills]);
+
+  const growthRate = useMemo(() => {
+    if (yesterdaysSales === 0) return todaysSales > 0 ? 100 : 0;
+    return ((todaysSales - yesterdaysSales) / yesterdaysSales) * 100;
+  }, [todaysSales, yesterdaysSales]);
+
+  const udharRatio = useMemo(() => {
+    return totalSales > 0 ? (pendingUdhar / totalSales) * 100 : 0;
+  }, [pendingUdhar, totalSales]);
+
+  const itemInsights = useMemo(() => {
+    const stats: Record<string, { name: string; qty: number; revenue: number; profit: number; cost: number }> = {};
+    bills.forEach(b => {
+      (b.items || []).forEach((item: any) => {
+        const name = item.product_name || item.name || 'Unknown';
+        if (!stats[name]) stats[name] = { name, qty: 0, revenue: 0, profit: 0, cost: 0 };
+        const qty = item.quantity || 1;
+        const price = item.price || 0;
+        const cost = item.cost_price || 0;
+        stats[name].qty += qty;
+        stats[name].revenue += price * qty;
+        stats[name].profit += (price - cost) * qty;
+        stats[name].cost += cost * qty;
+      });
+    });
+
+    const itemsArray = Object.values(stats);
+    if (itemsArray.length === 0) return null;
+
+    const mostProfitable = [...itemsArray].sort((a, b) => b.profit - a.profit)[0];
+    const highestMargin = [...itemsArray].sort((a, b) => {
+      const marginA = a.qty > 0 ? (a.profit / a.qty) : 0;
+      const marginB = b.qty > 0 ? (b.profit / b.qty) : 0;
+      return marginB - marginA;
+    })[0];
+    const mostSold = [...itemsArray].sort((a, b) => b.qty - a.qty)[0];
+    const lossMaking = itemsArray.filter(i => (i.profit / (i.qty || 1)) < 0);
+
+    return { mostProfitable, highestMargin, mostSold, lossMaking };
+  }, [bills]);
+
+  // ─── Graphs Data ───
+  const dailySalesData = useMemo(() => {
+    const days = Array.from({ length: 7 }, (_, i) => {
       const d = new Date(today);
       d.setDate(d.getDate() - (6 - i));
       return d;
     });
 
-    const profitTrend = last7Days.map(date => {
-      const dayBills = bills.filter(b => {
-        const bd = ensureDate(b.created_at);
-        return bd.getDate() === date.getDate() && bd.getMonth() === date.getMonth() && bd.getFullYear() === date.getFullYear();
-      });
-      const profit = dayBills.reduce((acc, b) => acc + (b.total_profit || 0), 0);
-      return {
-        dateStr: date.toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-US', { weekday: 'short' }),
-        profit
-      };
-    });
-
-    // 2. Product Stats
-    const itemStats: Record<string, { name: string, qty: number, revenue: number, cost: number }> = {};
-    bills.forEach(b => {
-      b.items?.forEach((item: any) => {
-        const itemName = item.name || item.product_name || 'Unknown Product';
-        const itemId = item.id || item.product_id;
-        
-        let product = products.find(p => p.id === itemId);
-        if (!product && typeof itemId === 'string' && itemId.includes('-')) {
-           product = products.find(p => p.id === itemId.split('-')[0]);
-        }
-        if (!product) {
-           product = products.find(p => p.name === itemName);
-        }
-
-        const cost = product?.costPrice || 0;
-        if (!itemStats[itemName]) {
-          itemStats[itemName] = { name: itemName, qty: 0, revenue: 0, cost: 0 };
-        }
-        
-        const qty = item.quantity || 1;
-        const price = item.price || 0;
-        
-        itemStats[itemName].qty += qty;
-        itemStats[itemName].revenue += price * qty;
-        itemStats[itemName].cost += cost * qty;
-      });
-    });
-
-    const itemAnalytics = Object.values(itemStats).map(stat => {
-      const profit = stat.revenue - stat.cost;
-      const margin = stat.revenue > 0 ? (profit / stat.revenue) * 100 : 0;
-      return { ...stat, profit, margin };
-    });
-
-    itemAnalytics.sort((a, b) => b.profit - a.profit);
-    const mostProfitable = itemAnalytics[0] || null;
-    const lowestProfit = itemAnalytics[itemAnalytics.length - 1] || null; 
-
-    itemAnalytics.sort((a, b) => b.margin - a.margin);
-    const bestMargin = itemAnalytics[0] || null;
-    const worstMargin = itemAnalytics[itemAnalytics.length - 1] || null;
-
-    // Smart Suggestions
-    const suggestions = [];
-    if (mostProfitable && mostProfitable.profit > 0) {
-      suggestions.push(`👍 "${mostProfitable.name}" gives highest profit (₹${mostProfitable.profit.toFixed(0)}). Stock more!`);
-    }
-    if (lowestProfit && lowestProfit.profit <= 0) {
-      suggestions.push(`⚠️ "${lowestProfit.name}" is causing a loss/0 profit. Review its selling price.`);
-    } else if (worstMargin && worstMargin.margin < 10 && worstMargin.name !== mostProfitable?.name) {
-      suggestions.push(`⚠️ "${worstMargin.name}" has a very low profit margin (${worstMargin.margin.toFixed(1)}%).`);
-    }
-    
-    // Compare Sales
-    const todayBills = bills.filter(b => {
-      const date = ensureDate(b.created_at);
-      return date >= today;
-    });
-    const yesterdayBills = bills.filter(b => {
-      const date = ensureDate(b.created_at);
-      return date >= yesterday && date < today;
-    });
-    
-    const ts = todayBills.reduce((acc, b) => acc + b.items.reduce((s, i) => s + (i.price * i.quantity), 0), 0);
-    const ys = yesterdayBills.reduce((acc, b) => acc + b.items.reduce((s, i) => s + (i.price * i.quantity), 0), 0);
-
-    if (ts > ys && ys > 0) {
-      suggestions.push(`📈 Great job! Today's sales (₹${ts}) improved compared to yesterday.`);
-    }
-
-    // Pending Udhar
-    const totalPendingUdhar = customers.reduce((acc, c) => acc + (c.total_due || 0), 0);
-    if (totalPendingUdhar > 0) { 
-      suggestions.push(`💰 You have high pending udhar (₹${totalPendingUdhar}). Send reminders soon.`);
-    }
-
-    return { profitTrend, mostProfitable, lowestProfit, bestMargin, worstMargin, suggestions, itemAnalytics };
-  }, [bills, products, today, yesterday, lang, customers]);
-
-  // --- 1. Today's Summary ---
-  const stats = useMemo(() => {
-    const todayBills = bills.filter(b => {
-      const date = ensureDate(b.created_at);
-      return date >= today;
-    });
-
-    const todayUdhar = udharList.filter(u => {
-      const date = ensureDate(u.created_at);
-      return date >= today && u.status === 'pending';
-    });
-
-    const todayPayments = udharList.filter(u => {
-      const date = ensureDate(u.created_at);
-      return date >= today && u.status === 'paid';
-    });
-
-    return {
-      earnings: todayBills.reduce((acc, b) => acc + b.total_amount, 0),
-      udharGiven: todayUdhar.reduce((acc, u) => acc + u.amount, 0),
-      paymentsReceived: todayPayments.reduce((acc, u) => acc + u.amount, 0),
-    };
-  }, [bills, udharList, today]);
-
-  // --- 2. Last 7 Days Trend ---
-  const { weeklyTrend, weeklyTotal } = useMemo(() => {
-    const freshToday = new Date();
-    freshToday.setHours(0, 0, 0, 0);
-
-    const last7Days = [...Array(7)].map((_, i) => {
-      const d = new Date(freshToday);
-      d.setDate(d.getDate() - (6 - i));
-      return d;
-    });
-
-    let totalSum = 0;
-    const trend = last7Days.map(date => {
+    return days.map(date => {
       const dayTotal = bills.filter(b => {
-        const bDate = ensureDate(b.created_at);
-        return bDate.getFullYear() === date.getFullYear() && 
-               bDate.getMonth() === date.getMonth() && 
-               bDate.getDate() === date.getDate();
-      }).reduce((acc, b) => acc + (b.total_amount || 0), 0);
+        const bd = ensureDate(b.created_at);
+        return bd.getFullYear() === date.getFullYear() &&
+               bd.getMonth() === date.getMonth() &&
+               bd.getDate() === date.getDate();
+      }).reduce((acc, b) => acc + getAmount(b), 0);
 
-      totalSum += dayTotal;
       const dayName = date.toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-US', { weekday: 'short' });
-      return { day: dayName, total: dayTotal };
+      const isToday = date.getDate() === today.getDate() &&
+                      date.getMonth() === today.getMonth() &&
+                      date.getFullYear() === today.getFullYear();
+      return { day: dayName, total: dayTotal, isToday };
     });
+  }, [bills, today, lang]);
 
-    return { weeklyTrend: trend, weeklyTotal: totalSum };
-  }, [bills, lang]);
+  const maxDaily = Math.max(...dailySalesData.map(d => d.total), 1);
 
-  // --- 3. Udhar Analysis ---
-  const udharAnalysis = useMemo(() => {
-    const pending = udharList.filter(u => u.status === 'pending');
-    const paid = udharList.filter(u => u.status === 'paid');
-    const pendingAmount = pending.reduce((acc, u) => acc + u.amount, 0);
-    const paidAmount = paid.reduce((acc, u) => acc + u.amount, 0);
-    
-    // Unique customers with pending udhar
-    const uniquePendingCustomers = new Set(pending.map(u => u.customer_id)).size;
-
-    return {
-      pendingAmount,
-      paidAmount,
-      pendingCount: uniquePendingCustomers,
-      totalCount: customers.length
+  // ─── Handlers ───
+  const handleSaveExpenses = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!isProUser) return;
+    setIsSavingExpense(true);
+    const formData = new FormData(e.currentTarget);
+    const expenses = {
+      electricity: Number(formData.get('electricity') || 0),
+      rent: Number(formData.get('rent') || 0),
+      staff: Number(formData.get('staff') || 0),
+      other: Number(formData.get('other') || 0),
     };
-  }, [udharList, customers]);
 
-  // --- 4. Top Performers (Customers & Items) ---
-  const topPerformers = useMemo(() => {
-    // Top 3 Customers by Total Bill Amount
-    const customerTotals: Record<string, number> = {};
-    bills.forEach(b => {
-      customerTotals[b.customer_id] = (customerTotals[b.customer_id] || 0) + b.total_amount;
-    });
-    const sortedCustomers = Object.entries(customerTotals)
-      .map(([id, total]) => ({
-        name: customers.find(c => c.id === id)?.name || "Unknown",
-        total
-      }))
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 3);
-
-    // Top 3 Items by Quantity
-    const itemTotals: Record<string, number> = {};
-    bills.forEach(b => {
-      b.items?.forEach((item: any) => {
-        itemTotals[item.product_name] = (itemTotals[item.product_name] || 0) + (item.quantity || 1);
-      });
-    });
-    const sortedItems = Object.entries(itemTotals)
-      .map(([name, qty]) => ({ name, qty }))
-      .sort((a, b) => b.qty - a.qty)
-      .slice(0, 3);
-
-    return { customers: sortedCustomers, items: sortedItems };
-  }, [bills, customers]);
-
-  // --- 5. Smart Insights Text ---
-  const smartInsightsText = useMemo(() => {
-    const yesterdaySales = bills.filter(b => {
-      const date = ensureDate(b.created_at);
-      return date >= yesterday && date < today;
-    }).reduce((acc, b) => acc + b.total_amount, 0);
-
-    const insights = [];
-    
-    if (stats.earnings > yesterdaySales && yesterdaySales > 0) {
-      insights.push({ text: t.salesIncreased, type: 'success', icon: TrendingUp });
-    } else if (stats.earnings < yesterdaySales && yesterdaySales > 0) {
-      insights.push({ text: t.salesDecreased, type: 'warning', icon: TrendingDown });
+    try {
+      await updateMonthlyExpenses(currentMonthKey, expenses);
+      setShowExpenseModal(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingExpense(false);
     }
+  };
 
-    if (udharAnalysis.pendingAmount > udharAnalysis.paidAmount) {
-      insights.push({ text: t.highPendingUdhar, type: 'danger', icon: AlertCircle });
-    }
-
-    if (topPerformers.items.length > 0) {
-      insights.push({ text: `${t.topItemInsight} ${topPerformers.items[0].name}`, type: 'info', icon: Package });
-    }
-
-    return insights;
-  }, [stats.earnings, yesterday, bills, today, t, udharAnalysis, topPerformers.items]);
-
-  const maxWeekly = Math.max(...weeklyTrend.map(t => t.total), 1);
-
+  // ─── PRO GATE ───
   if (!isProUser) {
     const openRazorpayCheckout = () => {
       const options = {
@@ -349,8 +247,8 @@ export const Insights = React.memo(() => {
             <Lock size={40} />
           </div>
           <h2 className="text-2xl font-black text-gray-800 mb-3">Premium Feature</h2>
-          <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">Unlock advanced analytics, unlimited WhatsApp messages, and smart insights by upgrading to Pro.</p>
-          <button 
+          <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">Unlock advanced analytics, expenses tracking, and smart insights by upgrading to Pro.</p>
+          <button
             onClick={openRazorpayCheckout}
             className="w-full bg-green-600 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-green-700 active:scale-[0.98] transition-all flex items-center justify-center gap-2"
           >
@@ -362,318 +260,309 @@ export const Insights = React.memo(() => {
   }
 
   return (
-    <div className="space-y-6 pb-24">
-      {/* SECTION 1: TODAY SUMMARY */}
-      <section className="grid grid-cols-1 gap-3">
-        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">{t.todayWork}</h3>
-        <div className="grid grid-cols-1 gap-3">
-          <motion.div whileHover={{ scale: 1.02 }} className="bg-green-600 p-5 rounded-[2.5rem] text-white shadow-xl shadow-green-200">
-            <p className="text-xs font-bold opacity-80 uppercase mb-1">{t.todayEarnings}</p>
-            <div className="flex items-center justify-between">
-              <h2 className="text-3xl font-black">₹{stats.earnings}</h2>
-              <div className="w-12 h-12 bg-white/20 rounded-2xl flex items-center justify-center">
-                <IndianRupee size={24} />
-              </div>
+    <div className="space-y-4 pb-24">
+      {/* ═══════ HERO CARD: TODAY'S SALES ═══════ */}
+      <motion.section
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="bg-gradient-to-br from-green-600 to-green-700 p-6 rounded-[2rem] text-white shadow-xl shadow-green-200/50 relative overflow-hidden"
+      >
+        <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -translate-y-8 translate-x-8" />
+        <div className="absolute bottom-0 left-0 w-24 h-24 bg-white/5 rounded-full translate-y-6 -translate-x-6" />
+        <div className="relative z-10">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-8 h-8 bg-white/20 rounded-xl flex items-center justify-center">
+              <IndianRupee size={16} />
             </div>
-          </motion.div>
-          
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">{t.todayUdharGiven}</p>
-              <h4 className="text-lg font-black text-red-600">₹{stats.udharGiven}</h4>
+            <p className="text-xs font-bold uppercase opacity-80 tracking-wider">{t.todaySalesTitle}</p>
+          </div>
+          <h2 className="text-4xl font-black mt-2 tracking-tight">{fmtFull(todaysSales)}</h2>
+          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-white/20">
+            <div>
+              <p className="text-[10px] uppercase opacity-70 font-bold">{t.grossProfit}</p>
+              <p className="text-lg font-black">{fmtFull(todaysGrossProfit)}</p>
             </div>
-            <div className="bg-white p-4 rounded-[2rem] border border-gray-100 shadow-sm">
-              <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">{t.todayPaymentsReceived}</p>
-              <h4 className="text-lg font-black text-green-600">₹{stats.paymentsReceived}</h4>
+            <div className="w-px h-8 bg-white/20" />
+            <div>
+              <p className="text-[10px] uppercase opacity-70 font-bold">{t.todayLabel} Bills</p>
+              <p className="text-lg font-black">{bills.filter(b => ensureDate(b.created_at) >= today).length}</p>
             </div>
           </div>
         </div>
-      </section>
+      </motion.section>
 
-      {/* SECTION: PROFIT & EXPENSES */}
-      <section className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm relative overflow-hidden">
-        {!isProUser && (
-          <div className="absolute inset-0 z-10 bg-white/60 backdrop-blur-sm flex items-center justify-center">
-            <span className="text-sm font-bold text-gray-800 bg-white px-4 py-2 rounded-full shadow-sm border border-gray-100 flex items-center gap-2">
-              <Crown size={18} className="text-yellow-500" /> Upgrade to unlock Profit Insights
-            </span>
+      {/* ═══════ PROFIT BREAKDOWN CARD (GROSS vs NET) ═══════ */}
+      <motion.section
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm relative overflow-hidden"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-green-50 rounded-lg flex items-center justify-center">
+              <TrendingUp size={14} className="text-green-500" />
+            </div>
+            <h3 className="text-xs font-bold text-gray-700">{t.totalProfitAllTime}</h3>
           </div>
-        )}
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1">Profit & Expenses (This Month)</h3>
-          <button disabled={!isProUser} onClick={() => setShowExpenseModal(true)} className="text-xs bg-green-50 text-green-700 font-bold px-3 py-1.5 rounded-xl hover:bg-green-100">
-            Edit Expenses
+          <button 
+            onClick={() => setShowExpenseModal(true)}
+            className="bg-green-600 text-white px-3 py-1.5 rounded-xl text-[10px] font-black flex items-center gap-1 shadow-sm active:scale-95 transition-all"
+          >
+            <Plus size={12} /> {t.addExpenses}
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div className="bg-green-50 p-4 rounded-3xl border border-green-100">
-            <p className="text-[10px] font-bold text-green-600 uppercase mb-1">Gross Profit</p>
-            <h4 className="text-xl font-black text-green-700">₹{profitStats.monthProfit}</h4>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <p className="text-[10px] uppercase font-bold text-gray-400 mb-1">{t.grossProfit}</p>
+            <p className="text-xl font-black text-gray-800">{fmtFull(totalGrossProfit)}</p>
           </div>
-          <div className="bg-red-50 p-4 rounded-3xl border border-red-100">
-            <p className="text-[10px] font-bold text-red-600 uppercase mb-1">Total Expenses</p>
-            <h4 className="text-xl font-black text-red-700">₹{totalMonthlyExpenses}</h4>
+          <div>
+            <p className="text-[10px] uppercase font-bold text-gray-400 mb-1">{t.netProfit}</p>
+            <p className="text-xl font-black text-green-600">{fmtFull(totalGrossProfit - totalMonthlyExpenses)}</p>
           </div>
-        </div>
-        <div className="bg-gray-800 p-4 rounded-3xl text-white flex justify-between items-center shadow-lg">
-           <span className="font-bold text-xs uppercase text-gray-300">Net Profit</span>
-           <span className="font-black text-2xl">₹{netProfit}</span>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 mt-4">
-          <div className="text-center p-3 border border-gray-100 rounded-2xl">
-            <p className="text-[10px] font-bold text-gray-400 uppercase">Today Profit</p>
-            <p className="font-black text-gray-800">₹{profitStats.todayProfit}</p>
-          </div>
-          <div className="text-center p-3 border border-gray-100 rounded-2xl">
-            <p className="text-[10px] font-bold text-gray-400 uppercase">Total Profit</p>
-            <p className="font-black text-gray-800">₹{profitStats.totalProfit}</p>
-          </div>
-        </div>
-      </section>
-
-      {/* SECTION: SMART ANALYTICS & SUGGESTIONS */}
-      <section className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm relative overflow-hidden mt-6 mb-6">
-        {!isProUser && (
-          <div className="absolute inset-0 z-10 bg-white/60 backdrop-blur-[2px] flex items-center justify-center">
-            <span className="text-sm font-bold text-gray-800 bg-white px-5 py-3 rounded-full shadow-lg border border-gray-100 flex items-center gap-2">
-              <Crown size={18} className="text-yellow-500" /> Upgrade for Smart Analytics
-            </span>
+        {totalMonthlyExpenses > 0 && (
+          <div className="mt-4 pt-3 border-t border-gray-50 flex items-center justify-between">
+            <p className="text-[9px] font-bold text-gray-400 uppercase tracking-tight">Expenses this month</p>
+            <p className="text-[10px] font-black text-red-500">-{fmtFull(totalMonthlyExpenses)}</p>
           </div>
         )}
-        
-        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1 mb-4 flex items-center gap-1">
-           <BrainCircuit size={14} className="text-purple-500" /> Smart Suggestions
-        </h3>
-        
-        <div className="space-y-3 mb-8">
-          {advancedStats?.suggestions.map((sug, i) => (
-            <div key={i} className="bg-gray-50 border border-gray-100 p-3 rounded-2xl flex items-start gap-2 text-[13px] font-medium text-gray-700 leading-snug">
-               {sug}
-            </div>
-          ))}
-          {(!advancedStats?.suggestions || advancedStats.suggestions.length === 0) && (
-            <p className="text-xs text-gray-400 px-1">Not enough data to generate suggestions yet.</p>
-          )}
-        </div>
+      </motion.section>
 
-        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1 mb-4 flex items-center gap-1">
-           <Activity size={14} className="text-blue-500" /> Profit Trend (Last 7 Days)
-        </h3>
-        
-        <div className="flex items-end justify-between bg-gray-50 p-4 rounded-3xl h-36 mb-8 border border-gray-100 pt-8">
-           {advancedStats?.profitTrend.map((pt, i) => {
-             const maxProfit = Math.max(...advancedStats.profitTrend.map(p => Math.abs(p.profit)), 1);
-             const heightPos = (Math.abs(pt.profit) / maxProfit) * 75;
-             return (
-               <div key={i} className="flex flex-col items-center gap-2 flex-1 h-full justify-end">
-                 {pt.profit !== 0 && (
-                   <span className={cn("text-[7px] font-black mb-1", pt.profit > 0 ? "text-green-600" : "text-red-600")}>
-                     ₹{pt.profit}
-                   </span>
-                 )}
-                 <div className="w-full relative flex justify-center h-16 items-end">
-                   {pt.profit > 0 && <div className="w-4/5 max-w-[12px] bg-green-400 rounded-t-md" style={{ height: `${Math.max(10, heightPos)}%` }} />}
-                   {pt.profit < 0 && <div className="w-4/5 max-w-[12px] bg-red-400 rounded-b-md absolute top-full" style={{ height: `${Math.max(10, heightPos)}%` }} />}
-                   {pt.profit === 0 && <div className="w-4/5 max-w-[12px] bg-gray-200 h-[2px] rounded-full" />}
-                 </div>
-                 <span className="text-[8px] font-bold text-gray-400 uppercase">{pt.dateStr}</span>
-               </div>
-             )
-           })}
-        </div>
-
-        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest px-1 mb-4 flex items-center gap-1">
-           <Trophy size={14} className="text-yellow-500" /> Product Performance
-        </h3>
-        
-        <div className="grid grid-cols-2 gap-3 mb-3">
-           <div className="border border-green-100 bg-green-50 p-3 rounded-2xl">
-             <p className="text-[9px] font-bold text-green-600 uppercase mb-1">Most Profitable</p>
-             <p className="font-bold text-gray-800 text-sm truncate">{advancedStats?.mostProfitable?.name || '-'}</p>
-             <p className="text-xs text-green-700 font-bold">₹{advancedStats?.mostProfitable?.profit.toFixed(0) || 0}</p>
-           </div>
-           <div className="border border-blue-100 bg-blue-50 p-3 rounded-2xl">
-             <p className="text-[9px] font-bold text-blue-600 uppercase mb-1">Best Margin</p>
-             <p className="font-bold text-gray-800 text-sm truncate">{advancedStats?.bestMargin?.name || '-'}</p>
-             <p className="text-xs text-blue-700 font-bold">{advancedStats?.bestMargin?.margin.toFixed(1) || 0}%</p>
-           </div>
-        </div>
-        
-        <div className="grid grid-cols-2 gap-3">
-           <div className="border border-red-100 bg-red-50 p-3 rounded-2xl">
-             <p className="text-[9px] font-bold text-red-600 uppercase mb-1">Lowest Profit/Loss</p>
-             <p className="font-bold text-gray-800 text-sm truncate">{advancedStats?.lowestProfit?.name || '-'}</p>
-             <p className="text-xs text-red-700 font-bold">₹{(advancedStats?.lowestProfit?.profit || 0).toFixed(0)}</p>
-           </div>
-           <div className="border border-orange-100 bg-orange-50 p-3 rounded-2xl">
-             <p className="text-[9px] font-bold text-orange-600 uppercase mb-1">Worst Margin</p>
-             <p className="font-bold text-gray-800 text-sm truncate">{advancedStats?.worstMargin?.name || '-'}</p>
-             <p className="text-xs text-orange-700 font-bold">{(advancedStats?.worstMargin?.margin || 0).toFixed(1)}%</p>
-           </div>
-        </div>
-
-      </section>
-
-      {/* SECTION 2: LAST 7 DAYS SALES */}
-      <section className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h3 className="text-sm font-bold text-gray-800">{t.last7DaysSales}</h3>
-            <p className="text-[10px] font-bold text-green-600 uppercase mt-1">Total: ₹{weeklyTotal}</p>
-          </div>
-          <ArrowUpRight size={20} className="text-green-600" />
-        </div>
-        <div className="flex items-end justify-between gap-1 h-32 pt-6">
-          {weeklyTrend.map((record, i) => (
-            <div key={i} className="flex flex-col items-center flex-1 gap-2 h-full justify-end">
-              {record.total > 0 && (
-                <span className="text-[8px] font-black text-green-600 mb-1">₹{record.total}</span>
-              )}
-              <motion.div 
-                initial={{ height: 0 }}
-                animate={{ height: `${(record.total / maxWeekly) * 85}%` }}
-                className="w-full bg-green-500 rounded-lg min-h-[4px] shadow-sm shadow-green-100"
-              />
-              <span className="text-[8px] font-bold text-gray-400 uppercase">{record.day}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* SECTION 3 & 6: UDHAR ANALYSIS & PAYMENT STATUS */}
-      <section className="bg-white p-6 rounded-[2.5rem] border border-gray-100 shadow-sm">
-        <h3 className="text-sm font-bold text-gray-800 mb-4">{t.udharAnalysis}</h3>
-        <div className="space-y-4">
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-bold text-gray-500">{t.totalPaidAmount}</span>
-              <span className="text-xs font-black text-green-600">₹{udharAnalysis.paidAmount}</span>
-            </div>
-            <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-              <motion.div 
-                initial={{ width: 0 }}
-                animate={{ width: `${(udharAnalysis.paidAmount / (udharAnalysis.paidAmount + udharAnalysis.pendingAmount || 1)) * 100}%` }}
-                className="bg-green-500 h-full"
-              />
-            </div>
-          </div>
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-bold text-gray-500">{t.totalPendingAmount}</span>
-              <span className="text-xs font-black text-red-600">₹{udharAnalysis.pendingAmount}</span>
-            </div>
-            <div className="w-full bg-gray-100 h-2 rounded-full overflow-hidden">
-              <motion.div 
-                initial={{ width: 0 }}
-                animate={{ width: `${(udharAnalysis.pendingAmount / (udharAnalysis.paidAmount + udharAnalysis.pendingAmount || 1)) * 100}%` }}
-                className="bg-red-500 h-full"
-              />
-            </div>
-          </div>
-          <div className="pt-4 flex items-center gap-2 border-t border-dashed border-gray-100">
-            <Users size={16} className="text-blue-500" />
-            <p className="text-[10px] font-bold text-gray-400">
-              {udharAnalysis.pendingCount} {t.udharCustomers}
-            </p>
-          </div>
-        </div>
-      </section>
-
-      {/* SECTION 4 & 5: TOP PERFORMERS */}
+      {/* ═══════ QUICK INSIGHTS GRID (SMART FIELDS) ═══════ */}
       <div className="grid grid-cols-2 gap-3">
-        <section className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm">
-          <h3 className="text-[10px] font-bold text-gray-400 uppercase mb-3">{t.topCustomers}</h3>
-          <div className="space-y-3">
-            {topPerformers.customers.map((c, i) => (
-              <div key={i}>
-                <p className="text-[11px] font-black text-gray-800 truncate">{c.name}</p>
-                <p className="text-[10px] text-green-600 font-bold">₹{c.total}</p>
-              </div>
-            ))}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="bg-white p-4 rounded-[1.5rem] border border-gray-100 shadow-sm"
+        >
+          <div className="flex items-center gap-1.5 mb-2">
+            <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${growthRate >= 0 ? 'bg-green-50' : 'bg-red-50'}`}>
+              {growthRate >= 0 ? <ArrowUpRight size={12} className="text-green-500" /> : <ArrowDownRight size={12} className="text-red-500" />}
+            </div>
+            <h3 className="text-[9px] font-bold text-gray-400 uppercase">{t.growthToday}</h3>
           </div>
-        </section>
-        <section className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm">
-          <h3 className="text-[10px] font-bold text-gray-400 uppercase mb-3">{t.topSoldItems}</h3>
-          <div className="space-y-3">
-            {topPerformers.items.map((item, i) => (
-              <div key={i}>
-                <p className="text-[11px] font-black text-gray-800 truncate">{item.name}</p>
-                <p className="text-[10px] text-blue-600 font-bold">{item.qty} {t.quantity}</p>
-              </div>
-            ))}
+          <p className={`text-lg font-black ${growthRate >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {growthRate >= 0 ? '+' : ''}{growthRate.toFixed(1)}%
+          </p>
+          <p className="text-[8px] text-gray-300 font-bold uppercase">{growthRate >= 0 ? t.growthUp : t.growthDown}</p>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+          className="bg-white p-4 rounded-[1.5rem] border border-gray-100 shadow-sm"
+        >
+          <div className="flex items-center gap-1.5 mb-2">
+            <div className="w-6 h-6 bg-blue-50 rounded-lg flex items-center justify-center">
+              <ShoppingBag size={12} className="text-blue-500" />
+            </div>
+            <h3 className="text-[9px] font-bold text-gray-400 uppercase">{t.avgBillValue}</h3>
           </div>
-        </section>
+          <p className="text-lg font-black text-gray-800">{fmtFull(avgBillValue)}</p>
+          <p className="text-[8px] text-gray-300 font-bold uppercase">{bills.length} bills total</p>
+        </motion.div>
+
+        <motion.div
+           initial={{ opacity: 0, y: 10 }}
+           animate={{ opacity: 1, y: 0 }}
+           transition={{ delay: 0.25 }}
+           className="bg-white p-4 rounded-[1.5rem] border border-gray-100 shadow-sm"
+        >
+          <div className="flex items-center gap-1.5 mb-2">
+            <div className="w-6 h-6 bg-purple-50 rounded-lg flex items-center justify-center">
+              <Percent size={12} className="text-purple-500" />
+            </div>
+            <h3 className="text-[9px] font-bold text-gray-400 uppercase">{t.udharRatio}</h3>
+          </div>
+          <p className="text-lg font-black text-gray-800">{udharRatio.toFixed(1)}%</p>
+          <p className="text-[8px] text-gray-300 font-bold uppercase">{fmt(pendingUdhar)} {t.pendingLabel}</p>
+        </motion.div>
+
+        <motion.div
+           initial={{ opacity: 0, y: 10 }}
+           animate={{ opacity: 1, y: 0 }}
+           transition={{ delay: 0.3 }}
+           className="bg-white p-4 rounded-[1.5rem] border border-gray-100 shadow-sm"
+        >
+          <div className="flex items-center gap-1.5 mb-2">
+            <div className="w-6 h-6 bg-orange-50 rounded-lg flex items-center justify-center">
+              <Wallet size={12} className="text-orange-500" />
+            </div>
+            <h3 className="text-[9px] font-bold text-gray-400 uppercase">{t.pendingUdharTitle}</h3>
+          </div>
+          <p className="text-lg font-black text-red-600">{fmt(pendingUdhar)}</p>
+          <p className="text-[8px] text-gray-300 font-bold uppercase">{udharList.filter(u => u.status === 'pending').length} entries</p>
+        </motion.div>
       </div>
 
-      {/* SECTION 7: QUICK INSIGHTS */}
-      {smartInsightsText.length > 0 && (
-        <section className="bg-blue-600 p-6 rounded-[2.5rem] text-white shadow-xl shadow-blue-100">
+      {/* ═══════ SMART PRODUCT INSIGHTS ═══════ */}
+      {itemInsights && (
+        <motion.section
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.35 }}
+          className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm"
+        >
           <div className="flex items-center gap-2 mb-4">
-            <TrendingUp size={20} />
-            <h3 className="text-sm font-bold uppercase tracking-tight">{t.smartInsights}</h3>
+            <div className="w-7 h-7 bg-orange-50 rounded-lg flex items-center justify-center">
+              <ShoppingBag size={14} className="text-orange-500" />
+            </div>
+            <h3 className="text-xs font-bold text-gray-700">Business Highlights</h3>
           </div>
-          <div className="space-y-3">
-            {smartInsightsText.map((insight, i) => {
-              const Icon = insight.icon;
-              return (
-                <motion.div 
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: i * 0.1 }}
-                  key={i} 
-                  className="flex items-start gap-3 bg-white/10 p-3 rounded-2xl"
-                >
-                  <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center shrink-0">
-                    <Icon size={16} />
-                  </div>
-                  <p className="text-xs font-bold leading-relaxed">{insight.text}</p>
-                </motion.div>
-              );
-            })}
+
+          <div className="space-y-4">
+            {itemInsights.mostProfitable && (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase">{t.mostProfitableItem}</p>
+                  <p className="text-xs font-black text-gray-800">{itemInsights.mostProfitable.name}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs font-black text-green-600">+{fmtFull(itemInsights.mostProfitable.profit)}</p>
+                </div>
+              </div>
+            )}
+
+            {itemInsights.highestMargin && (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase">{t.highestMarginItem}</p>
+                  <p className="text-xs font-black text-gray-800">{itemInsights.highestMargin.name}</p>
+                </div>
+                <div className="text-right text-[10px] font-bold text-gray-500">
+                  {t.profitMargin}: {fmtFull(itemInsights.highestMargin.profit / itemInsights.highestMargin.qty)}
+                </div>
+              </div>
+            )}
+
+            {itemInsights.mostSold && (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[9px] font-bold text-gray-400 uppercase">{t.mostSoldItem}</p>
+                  <p className="text-xs font-black text-gray-800">{itemInsights.mostSold.name}</p>
+                </div>
+                <div className="text-right text-[10px] font-bold text-gray-500">
+                  {itemInsights.mostSold.qty} {t.soldCount}
+                </div>
+              </div>
+            )}
+
+            {itemInsights.lossMaking.length > 0 && (
+              <div className="p-3 bg-red-50 rounded-xl border border-red-100 flex items-center gap-3">
+                <AlertTriangle size={16} className="text-red-500 shrink-0" />
+                <div>
+                  <p className="text-[10px] font-black text-red-700">{t.lossMakingItem}</p>
+                  <p className="text-[9px] font-bold text-red-500">{itemInsights.lossMaking.map(i => i.name).join(', ')}</p>
+                </div>
+              </div>
+            )}
           </div>
-        </section>
+        </motion.section>
       )}
 
-      <Modal isOpen={showExpenseModal} onClose={() => setShowExpenseModal(false)} title="Add Expenses">
-        <form onSubmit={async (e) => {
-          e.preventDefault();
-          if (!user) return;
-          const formData = new FormData(e.currentTarget);
-          const data = {
-            electricity: Number(formData.get("electricity")) || 0,
-            rent: Number(formData.get("rent")) || 0,
-            staff: Number(formData.get("staff")) || 0,
-            other: Number(formData.get("other")) || 0,
-            updated_at: Timestamp.now()
-          };
-          try {
-            await setDoc(doc(db, "shops", user.uid, "expenses", currentMonthId), data);
-            setShowExpenseModal(false);
-          } catch (err) {
-            console.error(err);
-            alert("Failed to save expenses");
-          }
-        }} className="space-y-4">
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-gray-400 uppercase">Electricity Bill</label>
-            <input name="electricity" type="number" defaultValue={expenses.electricity} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+      {/* ═══════ GRAPH 1: DAILY SALES (LAST 7 DAYS) ═══════ */}
+      <motion.section
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+        className="bg-white p-5 rounded-[2rem] border border-gray-100 shadow-sm"
+      >
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 bg-blue-50 rounded-lg flex items-center justify-center">
+              <BarChart3 size={14} className="text-blue-500" />
+            </div>
+            <h3 className="text-xs font-bold text-gray-700">{t.dailySalesGraph}</h3>
           </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-gray-400 uppercase">Rent</label>
-            <input name="rent" type="number" defaultValue={expenses.rent} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+          <p className="text-[10px] font-black text-green-600">{fmtFull(dailySalesData.reduce((a, d) => a + d.total, 0))}</p>
+        </div>
+        <div className="flex items-end justify-between gap-1 h-28">
+          {dailySalesData.map((d, i) => (
+            <div key={i} className="flex flex-col items-center flex-1 gap-1.5 h-full justify-end">
+              {d.total > 0 && (
+                <span className="text-[7px] font-black text-green-600">{fmt(d.total)}</span>
+              )}
+              <motion.div
+                initial={{ height: 0 }}
+                animate={{ height: `${Math.max(4, (d.total / maxDaily) * 85)}%` }}
+                transition={{ delay: i * 0.05, duration: 0.4 }}
+                className={`w-full rounded-lg min-h-[4px] ${
+                  d.isToday
+                    ? 'bg-gradient-to-t from-green-600 to-green-400 shadow-sm shadow-green-200'
+                    : 'bg-gray-200'
+                }`}
+              />
+              <span className={`text-[8px] font-bold uppercase ${d.isToday ? 'text-green-600' : 'text-gray-400'}`}>
+                {d.day}
+              </span>
+            </div>
+          ))}
+        </div>
+      </motion.section>
+
+      {/* ═══════ EXPENSE MODAL ═══════ */}
+      <Modal isOpen={showExpenseModal} onClose={() => setShowExpenseModal(false)} title={t.addExpenses}>
+        <form onSubmit={handleSaveExpenses} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase px-1">{t.electricity}</label>
+              <input 
+                name="electricity" 
+                type="number" 
+                defaultValue={currentExpenses.electricity || ''} 
+                placeholder="₹0" 
+                className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" 
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase px-1">{t.rent}</label>
+              <input 
+                name="rent" 
+                type="number" 
+                defaultValue={currentExpenses.rent || ''} 
+                placeholder="₹0" 
+                className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" 
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase px-1">{t.staff}</label>
+              <input 
+                name="staff" 
+                type="number" 
+                defaultValue={currentExpenses.staff || ''} 
+                placeholder="₹0" 
+                className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" 
+              />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase px-1">{t.other}</label>
+              <input 
+                name="other" 
+                type="number" 
+                defaultValue={currentExpenses.other || ''} 
+                placeholder="₹0" 
+                className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" 
+              />
+            </div>
           </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-gray-400 uppercase">Staff Salary</label>
-            <input name="staff" type="number" defaultValue={expenses.staff} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+
+          <div className="bg-green-50 p-4 rounded-2xl flex justify-between items-center border border-green-100">
+             <span className="text-xs font-black text-green-700">Total Monthly Expenses</span>
+             <span className="text-lg font-black text-green-700">{fmtFull(totalMonthlyExpenses)}</span>
           </div>
-          <div className="space-y-1">
-            <label className="text-[10px] font-bold text-gray-400 uppercase">Other Expenses</label>
-            <input name="other" type="number" defaultValue={expenses.other} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
-          </div>
-          <button type="submit" className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-center gap-2 mt-4">
-            Save Expenses
+
+          <button 
+            disabled={isSavingExpense} 
+            type="submit" 
+            className="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg flex items-center justify-center gap-2"
+          >
+            {isSavingExpense ? <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1 }} className="w-5 h-5 border-2 border-white border-t-transparent rounded-full" /> : t.save}
           </button>
         </form>
       </Modal>

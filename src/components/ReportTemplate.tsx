@@ -34,7 +34,7 @@ export const ReportTemplate = forwardRef<HTMLDivElement, ReportTemplateProps>(({
       {/* Summary Cards */}
       <div className="mb-5">
         <p className="text-[10px] font-bold text-[#9ca3af] uppercase tracking-widest mb-3">{t.insights || "Summary"}</p>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
           <div className="text-center p-3 rounded-lg" style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0' }}>
             <p className="text-[9px] font-bold text-[#16a34a] uppercase">{t.totalSalesMonth || "Sales"}</p>
             <p className="text-lg font-black text-[#166534]">₹{report.totalSales}</p>
@@ -47,6 +47,12 @@ export const ReportTemplate = forwardRef<HTMLDivElement, ReportTemplateProps>(({
             <p className="text-[9px] font-bold text-[#7c3aed] uppercase">{t.totalBillsMonth || "Bills"}</p>
             <p className="text-lg font-black text-[#5b21b6]">{report.totalBills}</p>
           </div>
+          {report.totalUdhar != null && (
+            <div className="text-center p-3 rounded-lg" style={{ backgroundColor: '#fef2f2', border: '1px solid #fecaca' }}>
+              <p className="text-[9px] font-bold text-[#dc2626] uppercase">{t.totalUdharReport || "Udhar"}</p>
+              <p className="text-lg font-black text-[#991b1b]">₹{report.totalUdhar}</p>
+            </div>
+          )}
         </div>
       </div>
 

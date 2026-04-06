@@ -50,6 +50,7 @@ interface AppContextType {
   markProductAsUsed: (id: string) => void;
   prefillProductName: string;
   setPrefillProductName: (name: string) => void;
+  updateMonthlyExpenses: (monthKey: string, expenses: any) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -271,17 +272,23 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
           }
         }
 
+        // Calculate total udhar (pending bills) for the month
+        const totalUdhar = prevMonthBills
+          .filter(b => b.status === 'pending')
+          .reduce((acc, b) => acc + (b.totalAmount || 0), 0);
+
         const reportData: Omit<MonthlyReport, 'id'> = {
           monthStr: reportName,
           totalSales,
           totalProfit,
           totalBills: prevMonthBills.length,
+          totalUdhar,
           bestItem,
           worstItem,
           profitTrend,
           comparisonWithLastMonth,
           createdAt: Timestamp.now(),
-          templateVersion: 'v1'
+          templateVersion: 'v2'
         };
 
         await setDoc(reportRef, reportData);
@@ -375,6 +382,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     });
   }, []);
 
+  const updateMonthlyExpenses = React.useCallback(async (monthKey: string, expenses: any) => {
+    if (!user || !shop) return;
+    try {
+      const shopRef = doc(db, "shops", user.uid);
+      const updatedExpenses = {
+        ...(shop.monthlyExpenses || {}),
+        [monthKey]: expenses
+      };
+      await updateDoc(shopRef, { monthlyExpenses: updatedExpenses });
+      setShop({ ...shop, monthlyExpenses: updatedExpenses });
+    } catch (err) {
+      console.error("Update Monthly Expenses Error:", err);
+      throw err;
+    }
+  }, [user, shop]);
+
   const contextValue = React.useMemo(() => ({
     user,
     shop,
@@ -400,8 +423,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     recentlyUsedIds,
     markProductAsUsed,
     prefillProductName,
-    setPrefillProductName
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup, recentlyUsedIds, markProductAsUsed, prefillProductName]);
+    setPrefillProductName,
+    updateMonthlyExpenses
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup, recentlyUsedIds, markProductAsUsed, prefillProductName, updateMonthlyExpenses]);
 
   return (
     <AppContext.Provider value={contextValue}>

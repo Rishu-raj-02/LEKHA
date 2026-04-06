@@ -15,6 +15,7 @@ export interface Shop {
   hasSeenWelcome?: boolean;
   dailyFinalizeCount?: number;
   lastFinalizeDate?: string;
+  monthlyExpenses?: Record<string, Omit<Expense, 'id'>>;
 }
 
 export interface Customer {
@@ -45,6 +46,8 @@ export interface Bill {
     phone: string | null;
   };
   totalAmount: number;
+  total_cost?: number;
+  total_profit?: number;
   status: "paid" | "pending";
   created_at: any;
   isArchived?: boolean;
@@ -85,6 +88,7 @@ export interface MonthlyReport {
   totalSales: number;
   totalProfit: number;
   totalBills: number;
+  totalUdhar?: number;
   bestItem: { name: string; profit: number };
   worstItem: { name: string; profit: number };
   profitTrend: { dateStr: string; profit: number }[];

@@ -46,7 +46,11 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
   const [tempWhatsAppPhone, setTempWhatsAppPhone] = useState("");
   const [autoDownloadEnabled, setAutoDownloadEnabled] = useState(false);
   const [autoDownloadOptions, setAutoDownloadOptions] = useState({ onSave: true, onNoSave: true });
-  const [savePreference, setSavePreference] = useState<'ask' | 'always' | 'never'>('ask');
+  const [savePreference, setSavePreference] = useState<'ask' | 'always' | 'never'>(() => {
+    const saved = localStorage.getItem("defaultActionPreference");
+    if (saved === 'always' || saved === 'never' || saved === 'ask') return saved;
+    return 'always';
+  });
   const [billingStep, setBillingStep] = useState<'editing' | 'deciding' | 'ready'>('editing');
   const [isSavedInDB, setIsSavedInDB] = useState(false);
   const [showDiamondMenu, setShowDiamondMenu] = useState(false);
@@ -175,6 +179,9 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
       setShowPricing(true);
       return;
     }
+    
+    // Persist current preference into localStorage only on Finalize action
+    localStorage.setItem("defaultActionPreference", savePreference);
 
     if (savePreference === 'always') {
       handleDecision(true);
