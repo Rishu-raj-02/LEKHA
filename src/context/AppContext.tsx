@@ -51,6 +51,8 @@ interface AppContextType {
   prefillProductName: string;
   setPrefillProductName: (name: string) => void;
   updateMonthlyExpenses: (monthKey: string, expenses: any) => Promise<void>;
+  activateTrial: () => Promise<void>;
+  trialDaysLeft: number;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -119,10 +121,18 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return true;
     if (!shop) return false;
     
+    // Check for Paid Pro Plan
     if (shop.isPro && shop.planExpiry) {
       const expiryMs = ensureDate(shop.planExpiry).getTime();
       if (Date.now() <= expiryMs) return true;
     }
+
+    // Check for Active Trial
+    if (shop.trialUsed && shop.trialEndDate) {
+      const expiryMs = ensureDate(shop.trialEndDate).getTime();
+      if (Date.now() <= expiryMs) return true;
+    }
+
     return false;
   }, [user, shop]);
 
@@ -130,12 +140,27 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return false;
     if (!shop) return false;
     
+    // If they have paid but it expired
     if (shop.isPro && shop.planExpiry) {
       const expiryMs = ensureDate(shop.planExpiry).getTime();
       if (Date.now() > expiryMs) return true;
     }
+
+    // If trial ended and not upgraded
+    if (shop.trialUsed && shop.trialEndDate && !shop.isPro) {
+      const expiryMs = ensureDate(shop.trialEndDate).getTime();
+      if (Date.now() > expiryMs) return true;
+    }
+
     return false;
   }, [user, shop]);
+
+  const trialDaysLeft = React.useMemo(() => {
+    if (!shop?.trialEndDate || !shop?.trialUsed || shop.isPro) return 0;
+    const expiryMs = ensureDate(shop.trialEndDate).getTime();
+    const diff = expiryMs - Date.now();
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)));
+  }, [shop]);
 
   useEffect(() => {
     if (!user || !shop) return;
@@ -398,6 +423,30 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [user, shop]);
 
+  const activateTrial = React.useCallback(async () => {
+    if (!user || !shop) return;
+    try {
+      const trialStartDate = Timestamp.now();
+      const expiryDate = new Date();
+      expiryDate.setDate(expiryDate.getDate() + 30);
+      const trialEndDate = Timestamp.fromDate(expiryDate);
+
+      const trialData = {
+        trialUsed: true,
+        trialStartDate,
+        trialEndDate,
+        planType: 'pro' as const,
+        isPro: false // Still not "Paid Pro", but logic uses trialEndDate
+      };
+
+      await updateDoc(doc(db, "shops", user.uid), trialData);
+      setShop({ ...shop, ...trialData });
+    } catch (error) {
+      console.error("Error activating trial:", error);
+      throw error;
+    }
+  }, [user, shop]);
+
   const contextValue = React.useMemo(() => ({
     user,
     shop,
@@ -424,8 +473,10 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     markProductAsUsed,
     prefillProductName,
     setPrefillProductName,
-    updateMonthlyExpenses
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup, recentlyUsedIds, markProductAsUsed, prefillProductName, updateMonthlyExpenses]);
+    updateMonthlyExpenses,
+    activateTrial,
+    trialDaysLeft
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup, recentlyUsedIds, markProductAsUsed, prefillProductName, updateMonthlyExpenses, activateTrial, trialDaysLeft]);
 
   return (
     <AppContext.Provider value={contextValue}>

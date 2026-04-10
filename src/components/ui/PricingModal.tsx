@@ -9,7 +9,7 @@ interface PricingModalProps {
 }
 
 export const PricingModal = ({ onPlanSelected }: PricingModalProps) => {
-  const { user, shop, setShop, lang, setLang } = useApp();
+  const { user, shop, setShop, lang, setLang, activateTrial } = useApp();
   const t = translations[lang];
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -77,6 +77,18 @@ export const PricingModal = ({ onPlanSelected }: PricingModalProps) => {
         setIsProcessing(false);
     });
     rzp.open();
+  };
+
+  const handleTrial = async () => {
+    setIsProcessing(true);
+    try {
+      await activateTrial();
+      onPlanSelected();
+    } catch (error: any) {
+      alert("Error starting trial: " + error.message);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   return (
@@ -147,10 +159,18 @@ export const PricingModal = ({ onPlanSelected }: PricingModalProps) => {
               <span className="text-green-600 font-bold uppercase tracking-widest text-[10px]">🚀 Best for growing दुकानदार</span>
               <h3 className="text-2xl font-black text-green-900 mt-1">Pro Plan</h3>
               <div className="mt-4 flex items-end gap-1">
-                <span className="text-5xl font-black text-green-700">₹49</span>
-                <span className="text-sm text-green-600 font-bold pb-1">/month</span>
+                {shop?.trialUsed ? (
+                  <>
+                    <span className="text-5xl font-black text-green-700">₹49</span>
+                    <span className="text-sm text-green-600 font-bold pb-1">/month</span>
+                  </>
+                ) : (
+                  <span className="text-3xl font-black text-green-700">Free for 1 Month</span>
+                )}
               </div>
-              <p className="text-green-700/80 text-sm font-bold mt-4 italic">Save hours daily & grow your business faster</p>
+              <p className="text-green-700/80 text-sm font-bold mt-4 italic">
+                {shop?.trialUsed ? "Save hours daily & grow your business faster" : "No credit card required • Cancel anytime"}
+              </p>
             </div>
             
             <div className="space-y-4 mb-2 flex-1">
@@ -171,11 +191,11 @@ export const PricingModal = ({ onPlanSelected }: PricingModalProps) => {
             </p>
 
             <button 
-              onClick={handleProPlan}
+              onClick={shop?.trialUsed ? handleProPlan : handleTrial}
               disabled={isProcessing}
               className="w-full bg-green-600 text-white py-5 rounded-2xl font-black text-xl shadow-[0_10px_20px_rgba(22,163,74,0.3)] hover:bg-green-700 active:scale-[0.98] transition-all flex justify-center items-center gap-2 mt-auto"
             >
-              {isProcessing ? "..." : "Upgrade to Pro"}
+              {isProcessing ? "..." : (shop?.trialUsed ? "Upgrade to Pro" : "Try Free for 1 Month")}
             </button>
           </div>
 

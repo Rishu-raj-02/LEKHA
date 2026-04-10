@@ -481,7 +481,7 @@ function AppContent() {
     );
   }
 
-  if (shop && !shop.planType) {
+  if (shop && !shop.planType && !shop.trialUsed) {
     return <PricingModal onPlanSelected={() => setActiveTab("home")} />;
   }
 
@@ -504,7 +504,8 @@ function AppContent() {
     );
   }
 
-  if (shop && isPlanExpired && shop.planType === "pro") {
+  if (shop && isPlanExpired && (shop.planType === "pro" || shop.trialUsed)) {
+    const isTrialExpiry = shop.trialUsed && !shop.isPro;
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6 relative">
         <button 
@@ -518,28 +519,35 @@ function AppContent() {
           <div className="w-20 h-20 bg-red-50 text-red-500 rounded-[1.5rem] mx-auto flex items-center justify-center mb-6">
             <AlertCircle size={40} />
           </div>
-          <h2 className="text-2xl font-black text-gray-800 mb-3">Plan Expired</h2>
-          <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">Your 1-month plan has expired.<br/>Renew to continue Pro features.</p>
+          <h2 className="text-2xl font-black text-gray-800 mb-3">
+            {isTrialExpiry ? "Trial Ended" : t.planExpired || "Plan Expired"}
+          </h2>
+          <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">
+            {isTrialExpiry 
+              ? "Your free trial has ended. Continue using Pro for ₹49/month." 
+              : "Your 1-month plan has expired. Renew to continue Pro features."}
+          </p>
           <div className="space-y-4">
               <button 
                 onClick={() => {
-                  // Redirect to Pricing Page inside the app flow
-                  setActiveTab("home"); // Ensure we are at home or somewhere where pricing can be shown
                   setShowPricing(true);
+                  // We don't set isPlanExpired to false, but setShowPricing(true) should overlay the PricingModal
                 }}
                 className="w-full bg-green-600 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-green-700 active:scale-[0.98] transition-all"
               >
-                Renew Now
+                {isTrialExpiry ? "Upgrade Now" : "Renew Now"}
               </button>
-             <button 
-                onClick={async () => {
-                  await updateDoc(doc(db, "shops", user!.uid), { planType: "free", isPro: false });
-                  setShop({ ...shop, planType: "free", isPro: false });
-                }}
-                className="w-full bg-gray-100 text-gray-700 font-bold py-4 rounded-2xl hover:bg-gray-200 active:scale-[0.98] transition-all"
-             >
-               Continue Free
-             </button>
+             {!isTrialExpiry && (
+               <button 
+                  onClick={async () => {
+                    await updateDoc(doc(db, "shops", user!.uid), { planType: "free", isPro: false });
+                    setShop({ ...shop, planType: "free", isPro: false });
+                  }}
+                  className="w-full bg-gray-100 text-gray-700 font-bold py-4 rounded-2xl hover:bg-gray-200 active:scale-[0.98] transition-all"
+               >
+                 Continue Free
+               </button>
+             )}
           </div>
         </div>
       </div>
@@ -616,6 +624,10 @@ function AppContent() {
 
         {activeTab === "home" && <Footer onNavigate={(page) => setCurrentLegalPage(page)} />}
       </main>
+
+      {showPricing && (
+        <PricingModal onPlanSelected={() => setShowPricing(false)} />
+      )}
 
       <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} t={t} />
 

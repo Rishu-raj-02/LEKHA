@@ -16,6 +16,9 @@ export interface Shop {
   dailyFinalizeCount?: number;
   lastFinalizeDate?: string;
   monthlyExpenses?: Record<string, Omit<Expense, 'id'>>;
+  trialUsed?: boolean;
+  trialStartDate?: any;
+  trialEndDate?: any;
 }
 
 export interface Customer {
