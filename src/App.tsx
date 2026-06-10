@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { User as UserIcon, Receipt, AlertCircle, CheckCircle2, Languages, Lock } from "lucide-react";
+import { User as UserIcon, Receipt, AlertCircle, CheckCircle2, Languages, Lock, X } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn, openWhatsApp } from "./utils/helpers";
 import {
@@ -77,6 +77,13 @@ function AppContent() {
   const [isMarkingPaidId, setIsMarkingPaidId] = useState<string | null>(null);
   const [showPricing, setShowPricing] = useState(false);
   const [duplicateProduct, setDuplicateProduct] = useState<{ existing: any; newData: any } | null>(null);
+  const [showTrialExpiredModal, setShowTrialExpiredModal] = useState(false);
+  const [trialPopupDismissed, setTrialPopupDismissed] = useState(false);
+
+  useEffect(() => {
+    const dismissed = typeof window !== "undefined" && window.sessionStorage.getItem("trialExpiryPopupDismissed");
+    setTrialPopupDismissed(dismissed === "true");
+  }, []);
 
   useEffect(() => {
     if (toast) {
@@ -84,6 +91,21 @@ function AppContent() {
       return () => clearTimeout(timer);
     }
   }, [toast]);
+
+  // Show trial expiry modal when plan is expired and the user has not dismissed it in this session
+  useEffect(() => {
+    if (shop && isPlanExpired && (shop.planType === "pro" || shop.trialUsed) && !trialPopupDismissed) {
+      setShowTrialExpiredModal(true);
+    }
+  }, [shop, isPlanExpired, trialPopupDismissed]);
+
+  const dismissTrialPopup = () => {
+    setShowTrialExpiredModal(false);
+    setTrialPopupDismissed(true);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("trialExpiryPopupDismissed", "true");
+    }
+  };
 
   // --- Handlers ---
   const handleCreateShop = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -292,7 +314,7 @@ function AppContent() {
     }
   };
 
-  const handleCreateBill = async (customerId: string, items: { name: string; price: number; quantity: number }[], billStatus: "paid" | "pending", billLang: "en" | "hi") => {
+  const handleCreateBill = async (customerId: string, items: { name: string; price: number; quantity: number }[], billStatus: "paid" | "pending" | "udhar", billLang: "en" | "hi") => {
     if (!user || !shop) return;
     if (items.length === 0) {
       setToast({ message: t.noItems, type: "error" });
@@ -328,30 +350,7 @@ function AppContent() {
     };
 
     try {
-      await addDoc(collection(db, "shops", user.uid, "bills"), billData);
-      
-      // Handle Udhar if pending
-      if (billStatus === "pending") {
-        await addDoc(collection(db, "shops", user.uid, "udhar"), {
-          customer_id: customerId || "walkin",
-          customer_name: customerData.name,
-          customer_phone: customerData.phone || "",
-          amount: totalAmount,
-          status: "pending",
-          type: "bill",
-          due_date: null,
-          created_at: Timestamp.now(),
-        });
-        
-        if (customerId) {
-          const customerRef = doc(db, "shops", user.uid, "customers", customerId);
-          const customerDoc = await getDoc(customerRef);
-          if (customerDoc.exists()) {
-            const currentUdhar = customerDoc.data().total_udhar || 0;
-            await updateDoc(customerRef, { total_udhar: currentUdhar + totalAmount });
-          }
-        }
-      }
+      const docRef = await addDoc(collection(db, "shops", user.uid, "bills"), billData);
       
       // Update inventory stock and last prices
       for (const i of items) {
@@ -373,6 +372,7 @@ function AppContent() {
       }
       
       setToast({ message: "Bill Saved Successfully ✅", type: "success" });
+      return docRef.id;
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `shops/${user.uid}/bills`);
       setToast({ message: "Failed to save bill", type: "error" });
@@ -487,8 +487,8 @@ function AppContent() {
 
   if (shop && shop.planType && !shop.hasSeenWelcome) {
     return (
-      <WelcomeScreen 
-        userName={shop.owner_name} 
+      <WelcomeScreen
+        userName={shop.owner_name}
         onComplete={async () => {
           if (!user || !shop) return;
           try {
@@ -499,58 +499,8 @@ function AppContent() {
             // Fallback: update local state anyway so user isn't stuck
             setShop({ ...shop, hasSeenWelcome: true });
           }
-        }} 
+        }}
       />
-    );
-  }
-
-  if (shop && isPlanExpired && (shop.planType === "pro" || shop.trialUsed)) {
-    const isTrialExpiry = shop.trialUsed && !shop.isPro;
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-6 relative">
-        <button 
-          onClick={() => setLang(lang === "en" ? "hi" : "en")} 
-          className="absolute top-6 right-6 p-2 bg-white border border-gray-200 hover:bg-gray-50 shadow-sm rounded-xl text-green-600 flex items-center gap-2 font-bold transition-all text-sm"
-        >
-          <Languages size={18} />
-          {lang === "en" ? "हिंदी" : "English"}
-        </button>
-        <div className="bg-white p-8 rounded-[2rem] max-w-sm w-full text-center shadow-xl border border-gray-100">
-          <div className="w-20 h-20 bg-red-50 text-red-500 rounded-[1.5rem] mx-auto flex items-center justify-center mb-6">
-            <AlertCircle size={40} />
-          </div>
-          <h2 className="text-2xl font-black text-gray-800 mb-3">
-            {isTrialExpiry ? "Trial Ended" : t.planExpired || "Plan Expired"}
-          </h2>
-          <p className="text-gray-500 mb-8 font-medium text-sm leading-relaxed">
-            {isTrialExpiry 
-              ? "Your free trial has ended. Continue using Pro for ₹49/month." 
-              : "Your 1-month plan has expired. Renew to continue Pro features."}
-          </p>
-          <div className="space-y-4">
-              <button 
-                onClick={() => {
-                  setShowPricing(true);
-                  // We don't set isPlanExpired to false, but setShowPricing(true) should overlay the PricingModal
-                }}
-                className="w-full bg-green-600 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-green-700 active:scale-[0.98] transition-all"
-              >
-                {isTrialExpiry ? "Upgrade Now" : "Renew Now"}
-              </button>
-             {!isTrialExpiry && (
-               <button 
-                  onClick={async () => {
-                    await updateDoc(doc(db, "shops", user!.uid), { planType: "free", isPro: false });
-                    setShop({ ...shop, planType: "free", isPro: false });
-                  }}
-                  className="w-full bg-gray-100 text-gray-700 font-bold py-4 rounded-2xl hover:bg-gray-200 active:scale-[0.98] transition-all"
-               >
-                 Continue Free
-               </button>
-             )}
-          </div>
-        </div>
-      </div>
     );
   }
 
@@ -618,7 +568,7 @@ function AppContent() {
               )
             )}
             {activeTab === "items" && <Items setShowAddProduct={setShowAddProduct} />}
-            {activeTab === "profile" && <Profile setShowEditProfile={setShowEditProfile} />}
+            {activeTab === "profile" && <Profile setShowEditProfile={setShowEditProfile} setShowPricing={setShowPricing} />}
           </motion.div>
         </React.Suspense>
 
@@ -716,6 +666,59 @@ function AppContent() {
       </AnimatePresence>
 
       {/* Modals */}
+      {/* Trial Expiry Popup (non-blocking) */}
+      {showTrialExpiredModal && (
+        <div className="fixed inset-x-4 top-4 z-50 flex justify-center pointer-events-none">
+          <div className="pointer-events-auto w-full max-w-sm sm:max-w-md bg-white border border-gray-200 shadow-2xl rounded-[1.5rem] p-5 sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <p className="text-gray-900 font-bold text-base sm:text-lg">
+                  {shop?.trialUsed && !shop?.isPro
+                    ? "Your free trial has ended"
+                    : "Your 1-month plan has expired"}
+                </p>
+                <p className="text-gray-600 mt-2 text-sm sm:text-base">
+                  {shop?.trialUsed && !shop?.isPro
+                    ? "Continue using Pro for ₹49/month."
+                    : "Renew to continue Pro features."}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={dismissTrialPopup}
+                className="h-10 w-10 flex items-center justify-center rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
+                aria-label="Close trial reminder"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="mt-5 flex flex-col gap-3">
+              <button
+                onClick={() => {
+                  setShowPricing(true);
+                  setShowTrialExpiredModal(false);
+                }}
+                className="w-full bg-green-600 text-white font-black py-3 rounded-2xl hover:bg-green-700 transition-colors"
+              >
+                {shop?.trialUsed && !shop?.isPro ? "Upgrade Now" : "Renew Now"}
+              </button>
+              {!(shop?.trialUsed && !shop?.isPro) && (
+                <button
+                  onClick={async () => {
+                    await updateDoc(doc(db, "shops", user!.uid), { planType: "free", isPro: false, trialUsed: false });
+                    setShop({ ...shop, planType: "free", isPro: false, trialUsed: false });
+                    setShowTrialExpiredModal(false);
+                  }}
+                  className="w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-2xl hover:bg-gray-200 transition-colors"
+                >
+                  Continue Free
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <Modal isOpen={showAddCustomer} onClose={() => setShowAddCustomer(false)} title={t.addCustomer}>
         <form onSubmit={handleAddCustomer} className="space-y-4">
           <input name="name" required placeholder={t.name} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />

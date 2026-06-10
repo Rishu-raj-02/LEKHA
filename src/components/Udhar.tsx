@@ -34,13 +34,13 @@ export const UdharTab = React.memo(({ setShowAddUdhar, handleMarkPaid, setToast,
     udharList.forEach(u => {
       if (u.status !== "pending") return;
 
-      const phone = u.customer_phone?.replace(/\D/g, "") || "unknown";
-      // Normalize to a 10-digit or 12-digit key for consistency
-      const phoneKey = phone.length >= 10 ? phone.slice(-10) : phone;
+      const rawPhone = u.customer_phone?.replace(/\D/g, "") || "";
+      // If phone missing or invalid, use entry id to keep separate
+      const isValidPhone = rawPhone.length >= 10;
+      const phoneKey = isValidPhone ? (rawPhone.length >= 10 ? rawPhone.slice(-10) : rawPhone) : u.id; // unique key when no phone
       
       if (!groups[phoneKey]) {
         // Resolve initial name and check if saved
-        const sanitizedPhone = phone.length === 10 ? "+91" + phone : (phone.length === 12 ? "+" + phone : phone);
         const existingC = customers.find(c => c.phone.replace(/\D/g, "").slice(-10) === phoneKey);
         
         groups[phoneKey] = {
@@ -106,7 +106,12 @@ export const UdharTab = React.memo(({ setShowAddUdhar, handleMarkPaid, setToast,
         finalName = newCustomerName;
         
         // Re-check if phone already exists before creating new
-        const existing = customers.find(c => c.phone === finalPhone);
+        let existing = null;
+        // Merge only if a valid phone is provided and matches an existing customer's phone.
+        if (finalPhone) {
+          existing = customers.find(c => c.phone === finalPhone);
+        }
+        // Do NOT merge based on name alone. If no phone or phone doesn't match, treat as new.
         if (existing) {
           targetCustomerId = existing.id;
           finalName = existing.name;

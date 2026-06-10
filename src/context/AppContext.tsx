@@ -43,6 +43,7 @@ interface AppContextType {
   logout: () => Promise<void>;
   isProUser: boolean;
   isPlanExpired: boolean;
+  isOwner: boolean;
   checkFinalizeLimit: () => Promise<boolean>;
   showReportPopup: MonthlyReport | null;
   dismissReportPopup: () => void;
@@ -53,14 +54,25 @@ interface AppContextType {
   updateMonthlyExpenses: (monthKey: string, expenses: any) => Promise<void>;
   activateTrial: () => Promise<void>;
   trialDaysLeft: number;
+  // New UPI modal control
+  showUpiModal: boolean;
+  setShowUpiModal: (v: boolean) => void;
+  openUpiSettings: () => void;
+  // Callback after UPI ID saved to continue billing flow
+  setOnUpiSaved: (callback: (() => void) | null) => void;
 }
+
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [shop, setShop] = useState<Shop | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [showUpiModal, setShowUpiModal] = useState(false);
+  const [onUpiSaved, setOnUpiSaved] = useState<(() => void) | null>(null);
+  const openUpiSettings = useCallback(() => setShowUpiModal(true), []);
+
   const [lang, setLang] = useState<"en" | "hi">("hi");
 
   // Data States
@@ -117,7 +129,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     return unsubscribe;
   }, []);
 
+  const isOwner = React.useMemo(() => {
+    const ownerEmails = ["rishusingh420024@gmail.com", "rishurajsingh419@gmail.com"];
+    return ownerEmails.includes(user?.email?.toLowerCase().trim() || "");
+  }, [user]);
+
   const isProUser = React.useMemo(() => {
+    // Owner account has full access
+    if (isOwner) return true;
+    
     if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return true;
     if (!shop) return false;
     
@@ -134,9 +154,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
 
     return false;
-  }, [user, shop]);
+  }, [user, shop, isOwner]);
 
   const isPlanExpired = React.useMemo(() => {
+    // Owner account never expires
+    if (isOwner) return false;
+    
     if (user?.email === "yourdemo@gmail.com" || user?.email === "lekhawebapp@gmail.com") return false;
     if (!shop) return false;
     
@@ -153,7 +176,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     }
 
     return false;
-  }, [user, shop]);
+  }, [user, shop, isOwner]);
 
   const trialDaysLeft = React.useMemo(() => {
     if (!shop?.trialEndDate || !shop?.trialUsed || shop.isPro) return 0;
@@ -297,9 +320,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
           }
         }
 
-        // Calculate total udhar (pending bills) for the month
+        // Calculate total udhar (pending/udhar bills) for the month
         const totalUdhar = prevMonthBills
-          .filter(b => b.status === 'pending')
+          .filter(b => b.status === 'pending' || b.status === 'udhar')
           .reduce((acc, b) => acc + (b.totalAmount || 0), 0);
 
         const reportData: Omit<MonthlyReport, 'id'> = {
@@ -464,9 +487,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     logout: handleLogout,
     isProUser,
     isPlanExpired,
+    isOwner,
     checkFinalizeLimit,
-    updateProductStock,
-    deleteProduct,
     showReportPopup,
     dismissReportPopup,
     recentlyUsedIds,
@@ -475,8 +497,16 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setPrefillProductName,
     updateMonthlyExpenses,
     activateTrial,
-    trialDaysLeft
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, checkFinalizeLimit, updateProductStock, deleteProduct, showReportPopup, dismissReportPopup, recentlyUsedIds, markProductAsUsed, prefillProductName, updateMonthlyExpenses, activateTrial, trialDaysLeft]);
+    trialDaysLeft,
+    // expose UPI controls
+    showUpiModal,
+    setShowUpiModal,
+    openUpiSettings,
+    setOnUpiSaved,
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, isOwner, checkFinalizeLimit, recentlyUsedIds, markProductAsUsed, prefillProductName, updateMonthlyExpenses, activateTrial, trialDaysLeft, showUpiModal]);
+
+
+
 
   return (
     <AppContext.Provider value={contextValue}>

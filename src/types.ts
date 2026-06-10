@@ -19,6 +19,7 @@ export interface Shop {
   trialUsed?: boolean;
   trialStartDate?: any;
   trialEndDate?: any;
+  upiId?: string;
 }
 
 export interface Customer {
@@ -51,7 +52,7 @@ export interface Bill {
   totalAmount: number;
   total_cost?: number;
   total_profit?: number;
-  status: "paid" | "pending";
+  status: "paid" | "pending" | "udhar";
   created_at: any;
   isArchived?: boolean;
 }
