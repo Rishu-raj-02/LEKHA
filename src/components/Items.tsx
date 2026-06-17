@@ -1,6 +1,5 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Search, X, Package, Plus, Minus, Trash2, Camera, RefreshCw, ChevronRight } from "lucide-react";
-import Fuse from 'fuse.js';
+import React, { useState, useMemo } from 'react';
+import { Search, X, Package, Plus, Minus, Trash2, Camera, RefreshCw, ChevronRight, CheckCircle2 } from "lucide-react";
 import { motion } from "motion/react";
 import { useApp } from "../context/AppContext";
 import { HighlightedText } from "./ui/HighlightedText";
@@ -8,6 +7,7 @@ import { useDebounce } from '../hooks/useDebounce';
 import { cn } from '../utils/helpers';
 import { translations } from '../translations';
 import { Product } from '../types';
+import { BarcodeScanner } from './BarcodeScanner';
 
 interface ItemsProps {
   setShowAddProduct: (v: boolean) => void;
@@ -41,147 +41,32 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
     markProductAsUsed(productId);
   };
 
-  // --- SCANNER LOGIC / STEP 4 OPTIMIZATIONS ---
+  // --- BARCODE SCANNER STATE ---
   const [isScanning, setIsScanning] = useState(false);
-  const [scanStatus, setScanStatus] = useState<"idle" | "scanning" | "found" | "did_you_mean" | "error">("idle");
-  const [scannedData, setScannedData] = useState<{ name: string; id?: string; stock?: number; suggestions?: Product[] } | null>(null);
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const scanIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const workerRef = useRef<any>(null); // Store Tesseract Web Worker
+  const { setPrefillBarcode, setPrefillPrice, setPrefillCategory } = useApp();
 
-  useEffect(() => {
-    return () => stopScanning();
-  }, []);
-
-  const startScanning = async () => {
-    setIsScanning(true);
-    setScanStatus("scanning");
-    setScannedData(null);
-    try {
-      // 1. Low resolution camera for faster processing
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment", width: 640, height: 480 } 
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        streamRef.current = stream;
-      }
-      
-      // 2. Initialize Web Worker ONCE to prevent UI lag
-      const Tesseract = await import('tesseract.js');
-      const worker = await Tesseract.default.createWorker('eng', 1, {
-         logger: () => {} 
-      });
-      // Restrict characters specifically
-      await worker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '
-      });
-      workerRef.current = worker;
-      
-      // 3. Timeout System: Error out after 7 seconds
-      scanTimeoutRef.current = setTimeout(() => {
-        setScanStatus("error");
-        stopScanning(false);
-      }, 7000);
-
-      processFrames();
-    } catch (err) {
-      console.error("Camera error:", err);
-      setScanStatus("error");
-    }
-  };
-
-  const stopScanning = (closeUI = true) => {
-    if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
-    if (scanTimeoutRef.current) clearTimeout(scanTimeoutRef.current);
+  const handleBarcodeScanned = async (barcode: string) => {
+    setIsScanning(false); // Unmount BarcodeScanner
     
-    // Stop Camera
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+    const { barcodeService } = await import('../services/barcodeService');
+    const { match } = barcodeService.lookupBarcode(barcode);
+    
+    setPrefillBarcode(barcode);
+    
+    if (match) {
+       setPrefillProductName(match.productName);
+       setPrefillPrice(String(match.suggestedSellingPrice));
+       setPrefillCategory(match.category || '');
+    } else {
+       setPrefillProductName('');
+       setPrefillPrice('');
+       setPrefillCategory('');
     }
     
-    // Terminate Web Worker
-    if (workerRef.current) {
-      workerRef.current.terminate();
-      workerRef.current = null;
-    }
-
-    if (closeUI) {
-      setIsScanning(false);
-      setScanStatus("idle");
-      setScannedData(null);
-    }
+    setShowAddProduct(true);
   };
 
-  const processFrames = () => {
-    // 4. Control Scan Frequency: Every 2.5s
-    scanIntervalRef.current = setInterval(async () => {
-      if (scanStatus === "found" || scanStatus === "not_found" || scanStatus === "error") {
-         if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
-         return;
-      }
-
-      if (videoRef.current && canvasRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && workerRef.current) {
-        const video = videoRef.current;
-        const canvas = canvasRef.current;
-        
-        const cropWidth = video.videoWidth * 0.8;
-        const cropHeight = video.videoHeight * 0.3;
-        const startX = (video.videoWidth - cropWidth) / 2;
-        const startY = (video.videoHeight - cropHeight) / 2;
-
-        canvas.width = cropWidth;
-        canvas.height = cropHeight;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        
-        // Apply visual filters specifically to help OCR engine
-        ctx.filter = "grayscale(100%) contrast(200%) brightness(120%)";
-        ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-        ctx.filter = "none";
-        
-        try {
-          const { data: { text } } = await workerRef.current.recognize(canvas);
-          const cleanText = text.replace(/[^a-zA-Z ]/g, "").trim();
-          
-          if (cleanText.length > 2) { 
-             const lowerText = cleanText.toLowerCase();
-             
-             // Exact Match verification first
-             const exactMatch = products.find(p => p.name.toLowerCase() === lowerText);
-             
-             if (exactMatch) {
-                setScannedData({ name: exactMatch.name, id: exactMatch.id, stock: exactMatch.stockQuantity || 0 });
-                setScanStatus("found");
-             } else {
-                // Fuzzy search logic using fuse.js
-                const fuse = new Fuse(products, {
-                  keys: ['name'],
-                  threshold: 0.4
-                });
-                const result = fuse.search(cleanText);
-
-                if (result.length > 0) {
-                   setScannedData({ name: cleanText, suggestions: result.slice(0, 3).map(r => r.item) });
-                   setScanStatus("did_you_mean");
-                } else {
-                   // Completely unidentifiable or entirely new string
-                   setScanStatus("error");
-                }
-             }
-             // 5. Stop camera after detection
-             stopScanning(false);
-          }
-        } catch (err) {
-          console.error("OCR error:", err);
-        }
-      }
-    }, 2500); 
-  };
 
   return (
     <div className="space-y-4 pb-24">
@@ -340,10 +225,10 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
 
       <div className="fixed bottom-32 right-6 flex flex-col gap-3 z-[80] items-end">
         <button
-          onClick={startScanning}
+          onClick={() => setIsScanning(true)}
           className="bg-gray-800 text-white shadow-lg px-4 py-3 rounded-2xl flex items-center gap-2 font-bold text-sm hover:scale-105 active:scale-95 transition-all w-auto whitespace-nowrap"
         >
-          <Camera size={18} /> Scan Product
+          <Camera size={18} /> Scan Barcode
         </button>
         <button
           onClick={() => setShowAddProduct(true)}
@@ -353,101 +238,12 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
         </button>
       </div>
 
-      {/* Scanner Overlay */}
+      {/* Isolated scanner — mounts/unmounts cleanly with its own lifecycle */}
       {isScanning && (
-        <div className="fixed inset-0 z-[100] bg-black/90 flex flex-col items-center justify-center">
-           <video 
-             ref={videoRef} 
-             autoPlay 
-             playsInline 
-             muted 
-             className="absolute w-full h-full object-cover opacity-60"
-           />
-           <canvas ref={canvasRef} className="hidden" />
-           
-           <div className="relative z-10 w-full px-6 flex flex-col items-center">
-             <div className="w-full aspect-[3/1] border-2 border-dashed border-green-500 rounded-2xl relative bg-green-500/10 backdrop-blur-[2px]">
-                <div className="absolute inset-0 bg-green-500/20 animate-pulse rounded-2xl"></div>
-             </div>
-             <p className="text-white font-bold mt-6 text-center text-lg drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-                Align product name inside box
-             </p>
-             
-             {(scanStatus === "scanning" || scanStatus === "idle") && (
-                <div className="mt-6 flex items-center gap-2 text-green-400 font-bold bg-black/60 backdrop-blur-md px-5 py-2.5 rounded-full shadow-2xl">
-                  <RefreshCw className="animate-spin" size={16} /> Scanning text...
-                </div>
-             )}
-             
-             {scanStatus === "error" && (
-                <div className="mt-10 bg-white p-6 rounded-3xl w-full max-w-sm text-center shadow-2xl animate-in fade-in zoom-in slide-in-from-bottom-5">
-                  <h3 className="text-xl font-black text-gray-800 mb-2">Could not detect clearly</h3>
-                  <div className="flex flex-col gap-3 mt-4">
-                    <button onClick={startScanning} className="w-full bg-green-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2"><RefreshCw size={16} /> Try Again</button>
-                    <button onClick={() => { stopScanning(); setShowAddProduct(true); }} className="w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-xl">Add Manually</button>
-                  </div>
-                </div>
-             )}
-
-             {scanStatus === "found" && scannedData && (
-                <div className="mt-10 bg-white p-6 rounded-3xl w-full max-w-sm text-center shadow-2xl animate-in fade-in zoom-in slide-in-from-bottom-5">
-                  <h3 className="text-sm font-bold text-gray-500 uppercase tracking-widest">Item already exists</h3>
-                  <p className="text-2xl font-black text-gray-800 mt-2">{scannedData.name}</p>
-                  <p className="text-lg font-bold text-green-600 mt-1">Stock: {scannedData.stock}</p>
-                  <div className="flex flex-col gap-3 mt-6">
-                    <button onClick={() => { handleUpdateStock(scannedData.id!, (scannedData.stock || 0) + 1); stopScanning(); }} className="w-full bg-green-600 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
-                       <Plus size={18} /> Add Stock
-                    </button>
-                    <button onClick={() => { setPrefillProductName(scannedData.name); stopScanning(); setShowAddProduct(true); }} className="w-full bg-gray-100 text-gray-700 font-bold py-3 rounded-xl">Add New</button>
-                  </div>
-                </div>
-             )}
-             
-             {scanStatus === "did_you_mean" && scannedData && (
-                <div className="mt-10 bg-white p-6 rounded-3xl w-full max-w-sm text-center shadow-2xl animate-in fade-in zoom-in slide-in-from-bottom-5">
-                  <h3 className="text-sm font-bold text-gray-500 uppercase tracking-widest">Detected Text:</h3>
-                  <p className="text-xl font-black text-gray-400 mt-1 line-through decoration-red-500/50">{scannedData.name}</p>
-                  
-                  <div className="mt-6 mb-4">
-                     <h4 className="text-sm font-black text-gray-800 text-left mb-2">Did you mean:</h4>
-                     <div className="flex flex-col gap-2">
-                        {scannedData.suggestions?.map((suggestion) => (
-                           <button 
-                              key={suggestion.id}
-                              onClick={() => {
-                                 setScannedData({ name: suggestion.name, id: suggestion.id, stock: suggestion.stockQuantity || 0 });
-                                 setScanStatus("found");
-                              }}
-                              className="w-full flex items-center justify-between bg-gray-50 hover:bg-green-50 active:bg-green-100 p-4 rounded-xl transition-all border border-gray-100 font-bold text-gray-800 text-left group"
-                           >
-                              <span className="flex items-center gap-2"><div className="w-2 h-2 rounded-full bg-green-500"></div> {suggestion.name}</span>
-                              <ChevronRight size={16} className="text-gray-400 group-hover:text-green-600" />
-                           </button>
-                        ))}
-                     </div>
-                  </div>
-
-                  <button 
-                     onClick={() => { 
-                        setPrefillProductName(scannedData.name); 
-                        stopScanning(); 
-                        setShowAddProduct(true); 
-                     }} 
-                     className="w-full bg-green-600 text-white font-bold py-3.5 rounded-xl shadow-[0_10px_40px_rgba(22,163,74,0.2)] hover:bg-green-700 active:scale-95 transition-all flex items-center justify-center gap-2"
-                  >
-                     Edit manually
-                  </button>
-                </div>
-             )}
-           </div>
-
-           <button 
-             onClick={stopScanning} 
-             className="absolute top-6 right-6 p-3 bg-black/40 hover:bg-black/60 rounded-full text-white backdrop-blur-md transition-all z-20 border border-white/10"
-           >
-             <X size={24} />
-           </button>
-        </div>
+        <BarcodeScanner
+          onScanned={handleBarcodeScanned}
+          onClose={() => setIsScanning(false)}
+        />
       )}
     </div>
   );

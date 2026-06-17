@@ -27,6 +27,7 @@ import { PrivacyPolicy, TermsAndConditions, RefundPolicy, ContactUs } from "./co
 
 import { PricingModal } from "./components/ui/PricingModal";
 import { WelcomeScreen } from "./components/WelcomeScreen";
+import { barcodeService } from "./services/barcodeService";
 
 const Home = React.lazy(() => import("./components/Home").then(m => ({ default: m.Home })));
 const Customers = React.lazy(() => import("./components/Customers").then(m => ({ default: m.Customers })));
@@ -54,7 +55,7 @@ const PremiumLock = ({ title, onUpgrade }: { title: string, onUpgrade: () => voi
 );
 
 function AppContent() {
-  const { user, shop, loading, lang, setLang, customers, products, setShop, error, login, isProUser, isPlanExpired, showReportPopup, dismissReportPopup, prefillProductName, setPrefillProductName } = useApp();
+  const { user, shop, loading, lang, setLang, customers, products, setShop, error, login, isProUser, isPlanExpired, showReportPopup, dismissReportPopup, prefillProductName, setPrefillProductName, prefillBarcode, setPrefillBarcode, prefillPrice, setPrefillPrice, prefillCategory, setPrefillCategory } = useApp();
   const t = translations[lang];
 
   const [activeTab, setActiveTab] = useState("home");
@@ -223,6 +224,7 @@ function AppContent() {
     const productData = {
       name: formData.get("name") as string,
       price: Number(formData.get("price")),
+      barcode: formData.get("barcode") as string,
       category: formData.get("category") as string,
       stockQuantity: isProUser ? Number(formData.get("stockQuantity") || 0) : 0,
       costPrice: isProUser ? Number(formData.get("costPrice") || 0) : 0,
@@ -241,9 +243,15 @@ function AppContent() {
     setIsAddingProduct(true);
     try {
       await addDoc(collection(db, "shops", user.uid, "products"), productData);
+      if (productData.barcode) {
+        barcodeService.contributeToCommunity(productData.barcode, productData.name, productData.price, productData.category);
+      }
       setToast({ message: t.addItem + " Success", type: "success" });
       setShowAddProduct(false);
       setPrefillProductName(""); // Clear prefill on success
+      setPrefillBarcode("");
+      setPrefillPrice("");
+      setPrefillCategory("");
       form.reset();
     } catch (err) {
       handleFirestoreError(err, OperationType.CREATE, `shops/${user.uid}/products`);
@@ -729,12 +737,13 @@ function AppContent() {
         </form>
       </Modal>
 
-      <Modal isOpen={showAddProduct} onClose={() => { setShowAddProduct(false); setPrefillProductName(""); }} title={t.addItem}>
+      <Modal isOpen={showAddProduct} onClose={() => { setShowAddProduct(false); setPrefillProductName(""); setPrefillBarcode(""); setPrefillPrice(""); setPrefillCategory(""); }} title={t.addItem}>
         <form onSubmit={handleAddProduct} className="space-y-4">
           <input name="name" required placeholder={t.name} defaultValue={prefillProductName} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+          <input name="barcode" placeholder="Barcode (Optional)" defaultValue={prefillBarcode} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
           <div className="grid grid-cols-2 gap-2">
-            <input name="price" type="number" required placeholder={t.price} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
-            <input name="category" placeholder={t.category} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+            <input name="price" type="number" required placeholder={t.price} defaultValue={prefillPrice} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
+            <input name="category" placeholder={t.category} defaultValue={prefillCategory} className="w-full p-4 rounded-2xl bg-gray-50 border-none outline-none font-bold" />
           </div>
 
           <div className="relative">

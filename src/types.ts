@@ -34,6 +34,7 @@ export interface Product {
   id: string;
   name: string;
   price: number;
+  barcode?: string;
   category?: string;
   stockQuantity?: number;
   costPrice?: number;

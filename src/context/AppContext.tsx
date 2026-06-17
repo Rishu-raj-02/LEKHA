@@ -51,6 +51,12 @@ interface AppContextType {
   markProductAsUsed: (id: string) => void;
   prefillProductName: string;
   setPrefillProductName: (name: string) => void;
+  prefillBarcode: string;
+  setPrefillBarcode: (barcode: string) => void;
+  prefillPrice: string;
+  setPrefillPrice: (price: string) => void;
+  prefillCategory: string;
+  setPrefillCategory: (category: string) => void;
   updateMonthlyExpenses: (monthKey: string, expenses: any) => Promise<void>;
   activateTrial: () => Promise<void>;
   trialDaysLeft: number;
@@ -101,6 +107,9 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     return cached ? JSON.parse(cached) : [];
   });
   const [prefillProductName, setPrefillProductName] = useState("");
+  const [prefillBarcode, setPrefillBarcode] = useState("");
+  const [prefillPrice, setPrefillPrice] = useState("");
+  const [prefillCategory, setPrefillCategory] = useState("");
   const [archivalDone, setArchivalDone] = useState(false);
   const dismissReportPopup = useCallback(() => setShowReportPopup(null), []);
 
@@ -495,6 +504,12 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     markProductAsUsed,
     prefillProductName,
     setPrefillProductName,
+    prefillBarcode,
+    setPrefillBarcode,
+    prefillPrice,
+    setPrefillPrice,
+    prefillCategory,
+    setPrefillCategory,
     updateMonthlyExpenses,
     activateTrial,
     trialDaysLeft,
@@ -503,7 +518,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setShowUpiModal,
     openUpiSettings,
     setOnUpiSaved,
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, isOwner, checkFinalizeLimit, recentlyUsedIds, markProductAsUsed, prefillProductName, updateMonthlyExpenses, activateTrial, trialDaysLeft, showUpiModal]);
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, isOwner, checkFinalizeLimit, recentlyUsedIds, markProductAsUsed, prefillProductName, prefillBarcode, prefillPrice, prefillCategory, updateMonthlyExpenses, activateTrial, trialDaysLeft, showUpiModal]);
 
 
 
