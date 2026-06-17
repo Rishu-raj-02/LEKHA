@@ -55,17 +55,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
       }
     };
 
-    // Countdown timer
-    const timer = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          doStop();
-          if (!unmounted) onCloseRef.current();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    // Countdown timer (created after video starts)
+    let timer: ReturnType<typeof setInterval> | null = null;
 
     const startScanner = async () => {
       try {
@@ -87,42 +78,44 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
         ]);
         hints.set(DecodeHintType.TRY_HARDER, true);
 
-        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 200 });
+        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150, tryPlayVideoTimeout: 3000 });
         readerRef.current = reader;
-
-        // Get camera — prefer back/rear
-        const devices = await BrowserMultiFormatReader.listVideoInputDevices();
-        if (unmounted) { doStop(); return; }
-
-        let deviceId: string | undefined;
-        if (devices.length > 0) {
-          const back = devices.find(d => /back|rear|environment/i.test(d.label));
-          deviceId = (back ?? devices[0]).deviceId;
-        }
-
-        // Acquire camera stream directly for maximum control
+        // Acquire camera stream quickly; prefer environment/back camera and high-resolution
         const constraints: MediaStreamConstraints = {
           video: {
-            deviceId: deviceId ? { exact: deviceId } : undefined,
-            facingMode: deviceId ? undefined : { ideal: 'environment' },
+            facingMode: { ideal: 'environment' },
             width: { ideal: 1920 },
             height: { ideal: 1080 },
+            frameRate: { ideal: 30, max: 60 },
           }
         };
 
+        const startRequest = performance.now();
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         if (unmounted) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
+
+        const startStreamMs = Math.round(performance.now() - startRequest);
+        console.log(`[Scanner] Camera acquired in ${startStreamMs}ms`);
 
         // Apply continuous autofocus if supported
         const videoTrack = stream.getVideoTracks()[0];
         if (videoTrack) {
           try {
             const caps = videoTrack.getCapabilities?.() as any;
+            // Prefer continuous focus when available
             if (caps?.focusMode?.includes('continuous')) {
-              await videoTrack.applyConstraints({
-                advanced: [{ focusMode: 'continuous' } as any]
-              });
+              await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' } as any] });
+              console.log('[Scanner] Applied continuous focus');
+            }
+            // Prefer the highest stable resolution reported
+            if (caps?.width && caps?.height) {
+              const idealW = Math.min(1920, caps.width.max ?? 1920);
+              const idealH = Math.min(1080, caps.height.max ?? 1080);
+              try {
+                await videoTrack.applyConstraints({ width: idealW, height: idealH });
+                console.log(`[Scanner] Applied resolution ${idealW}x${idealH}`);
+              } catch (_) {}
             }
           } catch (_) {}
         }
@@ -130,7 +123,24 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
         // Attach stream to our own <video> element
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          // start timer only after play resolves
+          const playStart = performance.now();
           await videoRef.current.play();
+          const playMs = Math.round(performance.now() - playStart);
+
+          // Start countdown now that camera is active
+          timer = setInterval(() => {
+            setTimeLeft(prev => {
+              if (prev <= 1) {
+                doStop();
+                if (!unmounted) onCloseRef.current();
+                return 0;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+
+          console.log(`[Scanner] Video started in ${playMs}ms — timer started`);
         }
 
         if (unmounted) { doStop(); return; }
@@ -143,7 +153,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
             if (result) {
               const text = result.getText();
               console.log('[Scanner] Detected:', text);
-              clearInterval(timer);
+              if (timer) { clearInterval(timer); timer = null; }
               doStop();
               setTimeout(() => onScannedRef.current(text), 50);
             }
