@@ -23,7 +23,10 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
 
   const videoRef    = useRef<HTMLVideoElement>(null);
   const readerRef   = useRef<any>(null);
+  const detectorRef = useRef<any>(null);
   const streamRef   = useRef<MediaStream | null>(null);
+  const detectionFrameRef = useRef<number | null>(null);
+  const fallbackTimerRef = useRef<number | null>(null);
   const stoppedRef  = useRef(false);
   const onScannedRef = useRef(onScanned);
   const onCloseRef   = useRef(onClose);
@@ -49,6 +52,17 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
         streamRef.current = null;
       }
 
+      // Cancel native detection loop
+      if (detectionFrameRef.current !== null) {
+        window.cancelAnimationFrame(detectionFrameRef.current);
+        detectionFrameRef.current = null;
+      }
+
+      if (fallbackTimerRef.current !== null) {
+        window.clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+
       // Clear the video element
       if (videoRef.current) {
         videoRef.current.srcObject = null;
@@ -57,29 +71,87 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
 
     // Countdown timer (created after video starts)
     let timer: ReturnType<typeof setInterval> | null = null;
+    const detectorFormats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'];
+
+    const startBarcodeDetector = async () => {
+      const BarcodeDetectorClass = (window as any).BarcodeDetector;
+      if (!BarcodeDetectorClass) {
+        return false;
+      }
+
+      try {
+        const supportedFormats: string[] | undefined = await BarcodeDetectorClass.getSupportedFormats?.();
+        const supported = !supportedFormats || detectorFormats.every(fmt => supportedFormats.includes(fmt));
+        if (!supported) {
+          console.log('[Scanner] BarcodeDetector available but missing required formats, falling back to ZXing');
+          return false;
+        }
+
+        const detector = new BarcodeDetectorClass({ formats: detectorFormats });
+        detectorRef.current = detector;
+        console.log('[Scanner] Using BarcodeDetector');
+        return true;
+      } catch (err) {
+        console.warn('[Scanner] BarcodeDetector init failed, falling back to ZXing', err);
+        return false;
+      }
+    };
+
+    const startZXing = async () => {
+      const [{ BrowserMultiFormatReader }, { DecodeHintType, BarcodeFormat }] = await Promise.all([
+        import('@zxing/browser'),
+        import('@zxing/library')
+      ]);
+
+      const hints = new Map();
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+        BarcodeFormat.EAN_13,
+        BarcodeFormat.EAN_8,
+        BarcodeFormat.UPC_A,
+        BarcodeFormat.UPC_E,
+        BarcodeFormat.CODE_128,
+        BarcodeFormat.CODE_39,
+      ]);
+      hints.set(DecodeHintType.TRY_HARDER, true);
+
+      const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150, tryPlayVideoTimeout: 3000 });
+      readerRef.current = reader;
+      console.log('[Scanner] Using ZXing fallback');
+      return reader;
+    };
+
+    const runBarcodeDetectorLoop = async () => {
+      if (stoppedRef.current || !videoRef.current || !detectorRef.current) return;
+      try {
+        const barcodes: any[] = await detectorRef.current.detect(videoRef.current);
+        if (stoppedRef.current) return;
+        if (barcodes && barcodes.length > 0) {
+          const text = barcodes[0].rawValue;
+          console.log('[Scanner] Detected:', text);
+          if (timer) { clearInterval(timer); timer = null; }
+          if (fallbackTimerRef.current !== null) {
+            window.clearTimeout(fallbackTimerRef.current);
+            fallbackTimerRef.current = null;
+          }
+          doStop();
+          setTimeout(() => onScannedRef.current(text), 50);
+          return;
+        }
+      } catch (_) {
+        // ignore detection failures and continue polling
+      }
+      detectionFrameRef.current = window.requestAnimationFrame(runBarcodeDetectorLoop);
+    };
 
     const startScanner = async () => {
       try {
-        const [{ BrowserMultiFormatReader }, { DecodeHintType, BarcodeFormat }] = await Promise.all([
-          import('@zxing/browser'),
-          import('@zxing/library')
-        ]);
+        const useNative = await startBarcodeDetector();
+        if (!useNative) {
+          await startZXing();
+        }
 
         if (unmounted) return;
 
-        const hints = new Map();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-          BarcodeFormat.EAN_13,
-          BarcodeFormat.EAN_8,
-          BarcodeFormat.UPC_A,
-          BarcodeFormat.UPC_E,
-          BarcodeFormat.CODE_128,
-          BarcodeFormat.CODE_39,
-        ]);
-        hints.set(DecodeHintType.TRY_HARDER, true);
-
-        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150, tryPlayVideoTimeout: 3000 });
-        readerRef.current = reader;
         // Acquire camera stream quickly; prefer environment/back camera and high-resolution
         const constraints: MediaStreamConstraints = {
           video: {
@@ -103,12 +175,10 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
         if (videoTrack) {
           try {
             const caps = videoTrack.getCapabilities?.() as any;
-            // Prefer continuous focus when available
             if (caps?.focusMode?.includes('continuous')) {
               await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' } as any] });
               console.log('[Scanner] Applied continuous focus');
             }
-            // Prefer the highest stable resolution reported
             if (caps?.width && caps?.height) {
               const idealW = Math.min(1920, caps.width.max ?? 1920);
               const idealH = Math.min(1080, caps.height.max ?? 1080);
@@ -120,15 +190,12 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
           } catch (_) {}
         }
 
-        // Attach stream to our own <video> element
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          // start timer only after play resolves
           const playStart = performance.now();
           await videoRef.current.play();
           const playMs = Math.round(performance.now() - playStart);
 
-          // Start countdown now that camera is active
           timer = setInterval(() => {
             setTimeLeft(prev => {
               if (prev <= 1) {
@@ -140,31 +207,54 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
             });
           }, 1000);
 
+          if (detectorRef.current) {
+            fallbackTimerRef.current = window.setTimeout(() => {
+              console.log('[Scanner] No native detection within 2.5s; starting ZXing fallback');
+              startZXing().then((reader) => {
+                if (stoppedRef.current || !videoRef.current || !reader) return;
+                reader.decodeFromVideoElement(videoRef.current, (result: any) => {
+                  if (stoppedRef.current) return;
+                  if (result) {
+                    const text = result.getText();
+                    console.log('[Scanner] Detected via ZXing fallback:', text);
+                    if (timer) { clearInterval(timer); timer = null; }
+                    doStop();
+                    setTimeout(() => onScannedRef.current(text), 50);
+                  }
+                });
+              }).catch((err) => {
+                console.warn('[Scanner] ZXing fallback start failed', err);
+              });
+            }, 2500);
+          }
+
           console.log(`[Scanner] Video started in ${playMs}ms — timer started`);
         }
 
         if (unmounted) { doStop(); return; }
 
-        // Start continuous decoding from the video element
-        reader.decodeFromVideoElement(
-          videoRef.current!,
-          (result: any, error: any) => {
-            if (stoppedRef.current) return;
-            if (result) {
-              const text = result.getText();
-              console.log('[Scanner] Detected:', text);
-              if (timer) { clearInterval(timer); timer = null; }
-              doStop();
-              setTimeout(() => onScannedRef.current(text), 50);
+        if (detectorRef.current) {
+          runBarcodeDetectorLoop();
+        } else if (readerRef.current) {
+          readerRef.current.decodeFromVideoElement(
+            videoRef.current!,
+            (result: any) => {
+              if (stoppedRef.current) return;
+              if (result) {
+                const text = result.getText();
+                console.log('[Scanner] Detected:', text);
+                if (timer) { clearInterval(timer); timer = null; }
+                doStop();
+                setTimeout(() => onScannedRef.current(text), 50);
+              }
             }
-            // error is normal when no barcode in frame — stay silent
-          }
-        );
+          );
+        }
 
         console.log('[Scanner] Ready — scanning for barcodes');
       } catch (err: any) {
         console.error('[Scanner] Start failed:', err?.message ?? err);
-        clearInterval(timer);
+        if (timer) { clearInterval(timer); timer = null; }
         doStop();
         if (!unmounted) onCloseRef.current();
       }

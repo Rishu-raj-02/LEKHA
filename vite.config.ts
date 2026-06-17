@@ -20,6 +20,7 @@ export default defineConfig(({mode}) => {
     server: {
       port: 3000,
       host: '0.0.0.0',
+      allowedHosts: ['.trycloudflare.com'],
       hmr: process.env.DISABLE_HMR !== 'true',
     },
   };
