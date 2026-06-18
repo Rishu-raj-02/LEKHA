@@ -193,7 +193,7 @@ export const translations = {
     createShop: "दुकान की जानकारी भरें",
     shopName: "दुकान का नाम",
     ownerName: "मालिक का नाम",
-    addItem: "नया आइटम",
+    addItem: "सामान चुनें",
     sendOnWhatsApp: "WhatsApp पर भेजें",
     noData: "अभी कुछ नहीं है",
     addNewCustomer: "नया ग्राहक जोड़ें",

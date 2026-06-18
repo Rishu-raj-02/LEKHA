@@ -8,6 +8,7 @@ import { cn } from '../utils/helpers';
 import { translations } from '../translations';
 import { Product } from '../types';
 import { BarcodeScanner } from './BarcodeScanner';
+import { Modal } from './ui/Modal';
 
 interface ItemsProps {
   setShowAddProduct: (v: boolean) => void;
@@ -21,6 +22,8 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
 
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 100); // Faster search for "instant" feel
+  const [deleteProductId, setDeleteProductId] = useState<string | null>(null);
+  const [deleteProductName, setDeleteProductName] = useState<string>("");
 
   const filteredProducts = useMemo(() => {
     return (products || []).filter(p => 
@@ -200,9 +203,8 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
 
                     <button 
                       onClick={() => {
-                        if (window.confirm(t.deleteConfirm || "Are you sure?")) {
-                          deleteProduct(p.id);
-                        }
+                        setDeleteProductId(p.id);
+                        setDeleteProductName(p.name);
                       }}
                       className="w-8 h-8 rounded-xl bg-red-50 text-red-500 flex items-center justify-center active:scale-90 transition-all hover:bg-red-100"
                     >
@@ -245,6 +247,31 @@ export const Items = React.memo(({ setShowAddProduct }: ItemsProps) => {
           onClose={() => setIsScanning(false)}
         />
       )}
+
+      <Modal isOpen={!!deleteProductId} onClose={() => setDeleteProductId(null)} title="Delete Item">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">Are you sure you want to delete <span className="font-bold">{deleteProductName}</span>? This cannot be undone.</p>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => setDeleteProductId(null)}
+              className="bg-gray-100 text-gray-700 py-3 rounded-2xl font-bold hover:bg-gray-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                if (deleteProductId) {
+                  deleteProduct(deleteProductId);
+                  setDeleteProductId(null);
+                }
+              }}
+              className="bg-red-600 text-white py-3 rounded-2xl font-bold hover:bg-red-700 transition-colors"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 });

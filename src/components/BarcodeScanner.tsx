@@ -4,6 +4,9 @@ import { X } from 'lucide-react';
 interface BarcodeScannerProps {
   onScanned: (barcode: string) => void;
   onClose: () => void;
+  continuous?: boolean;
+  cooldownMs?: number;
+  headerContent?: React.ReactNode;
 }
 
 const TIMEOUT_SECONDS = 15;
@@ -18,8 +21,10 @@ const TIMEOUT_SECONDS = 15;
  *  - Idempotent cleanup via stoppedRef.
  *  - Auto-closes after TIMEOUT_SECONDS with no detection.
  */
-export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClose }) => {
+export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClose, continuous = false, cooldownMs = 1000, headerContent }) => {
   const [timeLeft, setTimeLeft] = useState(TIMEOUT_SECONDS);
+  const lastDetectedRef = useRef<string | null>(null);
+  const lastDetectedTimeRef = useRef<number>(0);
 
   const videoRef    = useRef<HTMLVideoElement>(null);
   const readerRef   = useRef<any>(null);
@@ -27,6 +32,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
   const streamRef   = useRef<MediaStream | null>(null);
   const detectionFrameRef = useRef<number | null>(null);
   const fallbackTimerRef = useRef<number | null>(null);
+  const pauseTimerRef = useRef<number | null>(null);
+  const pausedRef = useRef(false);
   const stoppedRef  = useRef(false);
   const onScannedRef = useRef(onScanned);
   const onCloseRef   = useRef(onClose);
@@ -62,6 +69,12 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
         window.clearTimeout(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
       }
+
+      if (pauseTimerRef.current !== null) {
+        window.clearTimeout(pauseTimerRef.current);
+        pauseTimerRef.current = null;
+      }
+      pausedRef.current = false;
 
       // Clear the video element
       if (videoRef.current) {
@@ -120,22 +133,72 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
       return reader;
     };
 
+    const playBeep = () => {
+      try {
+        const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) return;
+        const ctx = new AudioCtx();
+        const oscillator = ctx.createOscillator();
+        const gain = ctx.createGain();
+        oscillator.frequency.value = 880;
+        oscillator.type = 'sine';
+        gain.gain.value = 0.15;
+        oscillator.connect(gain);
+        gain.connect(ctx.destination);
+        oscillator.start();
+        oscillator.stop(ctx.currentTime + 0.12);
+        oscillator.onended = () => {
+          try { ctx.close(); } catch (_) {}
+        };
+      } catch (_) {}
+    };
+
+    const reportBarcode = (text: string) => {
+      if (pausedRef.current) return false;
+      const now = performance.now();
+      const isDuplicate = text === lastDetectedRef.current && now - lastDetectedTimeRef.current < cooldownMs;
+      if (isDuplicate) return false;
+      lastDetectedRef.current = text;
+      lastDetectedTimeRef.current = now;
+      pausedRef.current = true;
+      if (pauseTimerRef.current !== null) {
+        window.clearTimeout(pauseTimerRef.current);
+      }
+      pauseTimerRef.current = window.setTimeout(() => {
+        pausedRef.current = false;
+        pauseTimerRef.current = null;
+      }, cooldownMs);
+      playBeep();
+      setTimeout(() => onScannedRef.current(text), 50);
+      return true;
+    };
+
     const runBarcodeDetectorLoop = async () => {
       if (stoppedRef.current || !videoRef.current || !detectorRef.current) return;
+      if (pausedRef.current) {
+        detectionFrameRef.current = window.requestAnimationFrame(runBarcodeDetectorLoop);
+        return;
+      }
       try {
         const barcodes: any[] = await detectorRef.current.detect(videoRef.current);
         if (stoppedRef.current) return;
         if (barcodes && barcodes.length > 0) {
           const text = barcodes[0].rawValue;
           console.log('[Scanner] Detected:', text);
-          if (timer) { clearInterval(timer); timer = null; }
-          if (fallbackTimerRef.current !== null) {
-            window.clearTimeout(fallbackTimerRef.current);
-            fallbackTimerRef.current = null;
+          if (!continuous) {
+            if (timer) { clearInterval(timer); timer = null; }
+            if (fallbackTimerRef.current !== null) {
+              window.clearTimeout(fallbackTimerRef.current);
+              fallbackTimerRef.current = null;
+            }
+            doStop();
+            setTimeout(() => onScannedRef.current(text), 50);
+            return;
           }
-          doStop();
-          setTimeout(() => onScannedRef.current(text), 50);
-          return;
+
+          if (reportBarcode(text)) {
+            console.log('[Scanner] Continuous detected:', text);
+          }
         }
       } catch (_) {
         // ignore detection failures and continue polling
@@ -196,16 +259,18 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
           await videoRef.current.play();
           const playMs = Math.round(performance.now() - playStart);
 
-          timer = setInterval(() => {
-            setTimeLeft(prev => {
-              if (prev <= 1) {
-                doStop();
-                if (!unmounted) onCloseRef.current();
-                return 0;
-              }
-              return prev - 1;
-            });
-          }, 1000);
+          if (!continuous) {
+            timer = setInterval(() => {
+              setTimeLeft(prev => {
+                if (prev <= 1) {
+                  doStop();
+                  if (!unmounted) onCloseRef.current();
+                  return 0;
+                }
+                return prev - 1;
+              });
+            }, 1000);
+          }
 
           if (detectorRef.current) {
             fallbackTimerRef.current = window.setTimeout(() => {
@@ -213,13 +278,19 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
               startZXing().then((reader) => {
                 if (stoppedRef.current || !videoRef.current || !reader) return;
                 reader.decodeFromVideoElement(videoRef.current, (result: any) => {
-                  if (stoppedRef.current) return;
+                  if (stoppedRef.current || pausedRef.current) return;
                   if (result) {
                     const text = result.getText();
                     console.log('[Scanner] Detected via ZXing fallback:', text);
-                    if (timer) { clearInterval(timer); timer = null; }
-                    doStop();
-                    setTimeout(() => onScannedRef.current(text), 50);
+                    if (!continuous) {
+                      if (timer) { clearInterval(timer); timer = null; }
+                      doStop();
+                      setTimeout(() => onScannedRef.current(text), 50);
+                      return;
+                    }
+                    if (reportBarcode(text)) {
+                      console.log('[Scanner] Continuous detected via ZXing fallback:', text);
+                    }
                   }
                 });
               }).catch((err) => {
@@ -239,13 +310,19 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
           readerRef.current.decodeFromVideoElement(
             videoRef.current!,
             (result: any) => {
-              if (stoppedRef.current) return;
+              if (stoppedRef.current || pausedRef.current) return;
               if (result) {
                 const text = result.getText();
                 console.log('[Scanner] Detected:', text);
-                if (timer) { clearInterval(timer); timer = null; }
-                doStop();
-                setTimeout(() => onScannedRef.current(text), 50);
+                if (!continuous) {
+                  if (timer) { clearInterval(timer); timer = null; }
+                  doStop();
+                  setTimeout(() => onScannedRef.current(text), 50);
+                  return;
+                }
+                if (reportBarcode(text)) {
+                  console.log('[Scanner] Continuous detected via ZXing fallback:', text);
+                }
               }
             }
           );
@@ -258,6 +335,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
         doStop();
         if (!unmounted) onCloseRef.current();
       }
+
     };
 
     startScanner();
@@ -286,6 +364,12 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
           </button>
         </div>
 
+        {headerContent && (
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50">
+            {headerContent}
+          </div>
+        )}
+
         {/* Camera preview — we own this video element directly */}
         <div className="w-full bg-black" style={{ minHeight: 260 }}>
           <video
@@ -305,7 +389,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({ onScanned, onClo
         {/* Footer */}
         <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-end">
           <span className="text-xs font-bold text-gray-500">
-            {timeLeft}s
+            {continuous ? 'Scanning...' : `${timeLeft}s`}
           </span>
         </div>
       </div>

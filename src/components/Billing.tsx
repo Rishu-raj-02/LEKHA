@@ -7,8 +7,9 @@ import { HighlightedText } from "./ui/HighlightedText";
 import { translations } from "../translations";
 import { useDebounce } from '../hooks/useDebounce';
 import { BillTemplate } from './BillTemplate';
-import { db, doc, updateDoc, collection, addDoc, getDoc, Timestamp } from "../firebase";
+import { db, doc, updateDoc, collection, addDoc, deleteDoc, getDoc, Timestamp } from "../firebase";
 import { Modal } from "./ui/Modal";
+import { BarcodeScanner } from "./BarcodeScanner";
 import { PaymentActionModal } from "./PaymentActionModal";
 interface BillingProps {
   setShowAddCustomer: (v: boolean) => void;
@@ -24,7 +25,7 @@ interface BillingProps {
 }
 
 export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, handleCreateBill, isSavingBill, setShowPricing }: BillingProps) => {
-  const { customers, products, shop, setShop, lang, isProUser, checkFinalizeLimit } = useApp();
+  const { customers, products, shop, setShop, lang, isProUser, checkFinalizeLimit, setPrefillProductName, setPrefillBarcode, setPrefillPrice, setPrefillCategory } = useApp();
   const t = translations[lang];
 
   const [selectedCustomer, setSelectedCustomer] = useState("");
@@ -34,6 +35,13 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
   
   const [customerSearch, setCustomerSearch] = useState("");
   const debouncedCustomerSearch = useDebounce(customerSearch, 300);
+
+  const [productSearch, setProductSearch] = useState("");
+  const debouncedProductSearch = useDebounce(productSearch, 100);
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
+  const [pendingScannerBarcode, setPendingScannerBarcode] = useState<string | null>(null);
+  const [notFoundBarcode, setNotFoundBarcode] = useState<string | null>(null);
 
   const [billLang, setBillLang] = useState<"en" | "hi">("en");
   const [billStatus, setBillStatus] = useState<"paid" | "pending" | "udhar">("paid");
@@ -46,6 +54,8 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
   const [showWhatsAppPhonePrompt, setShowWhatsAppPhonePrompt] = useState(false);
   const [tempWhatsAppCustomerName, setTempWhatsAppCustomerName] = useState("");
   const [tempWhatsAppPhone, setTempWhatsAppPhone] = useState("");
+  const [stockError, setStockError] = useState<string | null>(null);
+  const [showCashConfirm, setShowCashConfirm] = useState(false);
 
   const [billingStep, setBillingStep] = useState<'editing' | 'payment_action' | 'show_qr' | 'preview'>('editing');
   const [savedBillId, setSavedBillId] = useState<string | null>(null);
@@ -121,6 +131,71 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
     );
   }, [customers, debouncedCustomerSearch]);
 
+  const filteredProducts = useMemo(() => {
+    return (products || []).filter(p => 
+      (p.name?.toLowerCase() || "").includes(debouncedProductSearch.toLowerCase()) ||
+      (p.barcode?.toLowerCase() || "").includes(debouncedProductSearch.toLowerCase())
+    );
+  }, [products, debouncedProductSearch]);
+
+  const addOrIncrementBillItem = useCallback((product: any) => {
+    let message = `✓ ${product.name} added`;
+    setBillItems(prev => {
+      const existing = prev.find(i => i.id === product.id || i.id.startsWith(`${product.id}-`));
+      if (existing) {
+        const updated = prev.map(i => i.id === existing.id ? { ...i, quantity: i.quantity + 1 } : i);
+        message = `✓ ${product.name} x${existing.quantity + 1}`;
+        return updated;
+      }
+      return [...prev, { id: product.id, name: product.name, price: product.price, quantity: 1 }];
+    });
+    setScanMessage(message);
+  }, []);
+
+  useEffect(() => {
+    if (!pendingScannerBarcode) return;
+    const matchedProduct = products.find(p => p.barcode === pendingScannerBarcode);
+    if (matchedProduct) {
+      setPendingScannerBarcode(null);
+      addOrIncrementBillItem(matchedProduct);
+      setIsScannerOpen(true);
+    }
+  }, [products, pendingScannerBarcode, addOrIncrementBillItem]);
+
+  const handleBillingScan = async (barcode: string) => {
+    const product = products.find(p => p.barcode === barcode);
+    if (product) {
+      addOrIncrementBillItem(product);
+      return;
+    }
+    setIsScannerOpen(false);
+    setNotFoundBarcode(barcode);
+  };
+
+  const handleCreateMissingProduct = async () => {
+    if (!notFoundBarcode) return;
+    try {
+      const { barcodeService } = await import('../services/barcodeService');
+      const { match } = barcodeService.lookupBarcode(notFoundBarcode);
+      setPrefillBarcode(notFoundBarcode);
+      if (match) {
+        setPrefillProductName(match.productName);
+        setPrefillPrice(String(match.suggestedSellingPrice));
+        setPrefillCategory(match.category || '');
+      } else {
+        setPrefillProductName('');
+        setPrefillPrice('');
+        setPrefillCategory('');
+      }
+      setPendingScannerBarcode(notFoundBarcode);
+      setNotFoundBarcode(null);
+      setIsScannerOpen(false);
+      setShowAddProduct(true);
+    } finally {
+      // keep pending scanner barcode until product is added or form is cancelled
+    }
+  };
+
   // Get quantity of an item in the bill
   const getItemQty = useCallback((productId: string) => {
     const item = billItems.find(i => i.id === productId);
@@ -182,9 +257,66 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
     setBillItems(prev => prev.filter(i => i.id !== itemBillId));
   }, []);
 
+  const findProductForBillItem = (item: { id: string; name: string; price: number; quantity: number }) => {
+    return products.find(
+      (product) => product.id === item.id || item.id.startsWith(`${product.id}-`)
+    );
+  };
+
+  const applyInventoryUpdates = async () => {
+    if (!shop) return;
+
+    for (const item of billItems) {
+      const product = findProductForBillItem(item);
+      if (!product) continue;
+
+      const productRef = doc(db, "shops", shop.id, "products", product.id);
+      const productUpdates: any = {};
+
+      if (typeof product.stockQuantity === "number") {
+        productUpdates.stockQuantity = Math.max(0, product.stockQuantity - item.quantity);
+      }
+
+      if (product.sellingType === "variable" && item.price !== undefined) {
+        productUpdates.lastUsedPrice = item.price;
+      }
+
+      if (Object.keys(productUpdates).length > 0) {
+        await updateDoc(productRef, productUpdates);
+      }
+    }
+  };
+
+  const validateBillStock = () => {
+    const oversoldItem = billItems.find((item) => {
+      const product = findProductForBillItem(item);
+      return (
+        product &&
+        typeof product.stockQuantity === "number" &&
+        item.quantity > product.stockQuantity
+      );
+    });
+
+    if (!oversoldItem) return true;
+
+    const product = findProductForBillItem(oversoldItem);
+    if (!product) return true;
+
+    setStockError(
+      `Only ${product.stockQuantity} ${product.name} ${
+        product.stockQuantity === 1 ? "unit" : "units"
+      } are available. Update the quantity before finalizing.`
+    );
+    return false;
+  };
+
   const initiateBilling = useCallback(async () => {
     if (billItems.length === 0) {
       setLocalToast(t.noItems);
+      return;
+    }
+
+    if (!validateBillStock()) {
       return;
     }
 
@@ -195,7 +327,6 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
     }
 
     try {
-      // Create and save bill to DB immediately with 'pending' status
       const billId = await handleCreateBill(selectedCustomer, billItems, "pending", billLang);
       if (billId) {
         setSavedBillId(billId);
@@ -207,7 +338,7 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
       console.error(err);
       setLocalToast("Failed to save bill");
     }
-  }, [billItems, selectedCustomer, billLang, handleCreateBill, checkFinalizeLimit, setShowPricing, t.noItems]);
+  }, [billItems, selectedCustomer, billLang, handleCreateBill, checkFinalizeLimit, setShowPricing, t.noItems, products]);
 
   const updateBillStatus = async (status: "paid" | "udhar", customerInfo?: { name: string; phone: string | null }) => {
     if (!savedBillId || !shop) return;
@@ -284,6 +415,9 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
         name: finalName,
         phone: finalPhone || null
       });
+
+      // Update inventory after bill is finalized as Udhar
+      await applyInventoryUpdates();
 
       // Create Udhar document
       await addDoc(collection(db, "shops", shop.id, "udhar"), {
@@ -424,6 +558,25 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
     window.open(`https://wa.me/${finalPhone}?text=${msg}`, '_blank');
   };
 
+  const handleConfirmCashPayment = async () => {
+    setShowCashConfirm(false);
+    await updateBillStatus('paid');
+    await applyInventoryUpdates();
+    setBillingStep('preview');
+    setLocalToast('Payment Received - Cash ✅');
+  };
+
+  const handleCancelBilling = async () => {
+    if (shop && savedBillId) {
+      try {
+        await deleteDoc(doc(db, "shops", shop.id, "bills", savedBillId));
+      } catch (err) {
+        console.error("Failed to delete pending bill:", err);
+      }
+    }
+    resetBilling();
+  };
+
   const resetBilling = () => {
     setBillingStep('editing');
     setBillItems([]);
@@ -452,16 +605,49 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
               <div className="flex items-center gap-2">
                 <button 
                   onClick={() => setShowAddProduct(true)}
-                  className="text-[10px] font-bold text-green-600 flex items-center gap-0.5 bg-green-50 px-2.5 py-1 rounded-full ml-1"
+                  className="text-[10px] font-bold text-green-600 flex items-center gap-0.5 bg-green-50 px-2.5 py-1 rounded-full"
                 >
                   <Plus size={12} /> Add New Item
                 </button>
               </div>
             </div>
 
-            {/* Item Rows */}
+            {/* Search Bar */}
+            <div className="px-4 pt-4 pb-3 space-y-3">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+                <input 
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  className="w-full pl-10 pr-10 py-3 rounded-2xl bg-white border border-gray-100 shadow-sm outline-none focus:ring-2 focus:ring-green-500 transition-all font-medium" 
+                  placeholder={t.search || "Search items..."} 
+                />
+                {productSearch && (
+                  <button 
+                    onClick={() => setProductSearch("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <X size={18} />
+                  </button>
+                )}
+              </div>
+
+              <button 
+                onClick={() => {
+                  setScanMessage(null);
+                  setIsScannerOpen(true);
+                }}
+                className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 hover:bg-black transition-colors"
+              >
+                <Camera size={16} /> Scan Items
+              </button>
+            </div>
             <div className="divide-y divide-gray-50">
-              {products.map(p => {
+              {filteredProducts.length === 0 ? (
+                <div className="px-4 py-8 text-center text-sm text-gray-400">
+                  No matching items found.
+                </div>
+              ) : filteredProducts.map(p => {
                 const isVariable = isProUser && p.sellingType === "variable";
                 const billEntry = billItems.find(i => i.id === p.id || i.id.startsWith(p.id + '-'));
                 const qty = billEntry?.quantity || 0;
@@ -820,16 +1006,82 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
               setShowUpiSetup(true);
             }
           }}
-          onCash={async () => {
-            const confirm = window.confirm(t.confirmPaymentReceived || "Have you received the payment?");
-            if (confirm) {
-              await updateBillStatus('paid');
-              setBillingStep('preview');
-              setLocalToast('Payment Received - Cash ✅');
-            }
+          onCash={() => {
+            setShowCashConfirm(true);
           }}
           onUdhar={() => setShowUdharForm(true)}
-          onCancel={resetBilling}
+          onCancel={handleCancelBilling}
+        />
+      )}
+
+      <Modal isOpen={!!stockError} onClose={() => setStockError(null)} title="Invalid Quantity">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">{stockError}</p>
+          <button
+            onClick={() => setStockError(null)}
+            className="w-full bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-colors"
+          >
+            OK
+          </button>
+        </div>
+      </Modal>
+
+      <Modal isOpen={showCashConfirm} onClose={() => setShowCashConfirm(false)} title={t.confirmPaymentReceived || "Confirm Payment"}>
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">{t.confirmPaymentReceived || "Have you received the payment?"}</p>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => setShowCashConfirm(false)}
+              className="bg-gray-100 text-gray-700 py-3 rounded-2xl font-bold hover:bg-gray-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleConfirmCashPayment}
+              className="bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-colors"
+            >
+              Confirm
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal isOpen={!!notFoundBarcode} onClose={() => setNotFoundBarcode(null)} title="Product not found">
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">We could not find this barcode in inventory.</p>
+          <p className="text-xs text-gray-500 break-all">Barcode: {notFoundBarcode}</p>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              onClick={() => setNotFoundBarcode(null)}
+              className="bg-gray-100 text-gray-700 py-3 rounded-2xl font-bold hover:bg-gray-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleCreateMissingProduct}
+              className="bg-green-600 text-white py-3 rounded-2xl font-bold hover:bg-green-700 transition-colors"
+            >
+              Add New Item
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {isScannerOpen && (
+        <BarcodeScanner
+          continuous
+          cooldownMs={3000}
+          onScanned={handleBillingScan}
+          onClose={() => setIsScannerOpen(false)}
+          headerContent={
+            <div className="space-y-2 text-sm">
+              {scanMessage ? (
+                <p className="text-green-700 font-semibold truncate">{scanMessage}</p>
+              ) : (
+                <p className="text-gray-500">Scan one item at a time. Camera stays on while scanning pauses.</p>
+              )}
+            </div>
+          }
         />
       )}
 
@@ -867,6 +1119,7 @@ export const Billing = React.memo(({ setShowAddCustomer, setShowAddProduct, hand
           <button
             onClick={async () => {
               await updateBillStatus("paid");
+              await applyInventoryUpdates();
               setBillingStep('preview');
               setLocalToast("Payment Received - UPI QR ✅");
             }}

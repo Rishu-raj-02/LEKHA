@@ -359,26 +359,6 @@ function AppContent() {
 
     try {
       const docRef = await addDoc(collection(db, "shops", user.uid, "bills"), billData);
-      
-      // Update inventory stock and last prices
-      for (const i of items) {
-        const p = products.find(prod => prod.name === i.name);
-        if (p && p.id) {
-          const productRef = doc(db, "shops", user.uid, "products", p.id);
-          const updates: any = {};
-          if (p.stockQuantity !== undefined) {
-            // STOCK UPDATE RULES: Billing/Save reduces stock
-            updates.stockQuantity = Math.max(0, p.stockQuantity - i.quantity);
-          }
-          if (p.sellingType === "variable") {
-            updates.lastUsedPrice = i.price;
-          }
-          if (Object.keys(updates).length > 0) {
-            await updateDoc(productRef, updates).catch(console.error);
-          }
-        }
-      }
-      
       setToast({ message: "Bill Saved Successfully ✅", type: "success" });
       return docRef.id;
     } catch (err) {

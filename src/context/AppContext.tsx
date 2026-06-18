@@ -502,6 +502,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     dismissReportPopup,
     recentlyUsedIds,
     markProductAsUsed,
+    updateProductStock,
+    deleteProduct,
     prefillProductName,
     setPrefillProductName,
     prefillBarcode,
@@ -518,7 +520,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     setShowUpiModal,
     openUpiSettings,
     setOnUpiSaved,
-  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, isOwner, checkFinalizeLimit, recentlyUsedIds, markProductAsUsed, prefillProductName, prefillBarcode, prefillPrice, prefillCategory, updateMonthlyExpenses, activateTrial, trialDaysLeft, showUpiModal]);
+  }), [user, shop, loading, lang, customers, products, bills, udharList, monthlyReports, error, login, handleLogout, isProUser, isPlanExpired, isOwner, checkFinalizeLimit, recentlyUsedIds, markProductAsUsed, updateProductStock, deleteProduct, prefillProductName, prefillBarcode, prefillPrice, prefillCategory, updateMonthlyExpenses, activateTrial, trialDaysLeft, showUpiModal]);
 
 
 
